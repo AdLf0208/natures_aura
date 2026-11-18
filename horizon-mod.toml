@@ -1,0 +1,34 @@
+# Nature's Aura for Horizon — slice 1: the aura loop, one flat SDK package.
+#
+# Migrated 2026-11-18 from the retired `.hnmod` container (Horizon's mod-API merge
+# #16941; the registry closed submission #837 with the format purge). The manifest
+# below is the only one: identity, the content capability and the exact native
+# pins. `assets/` and `data/` are the carried content (the aura bloom, the nature's
+# altar, its gold bricks and the three crafted materials), `src/` is the port's
+# code; both halves travel in one file, which is the point of the SDK layout.
+#
+# Licence: MIT, read from the jar's `META-INF/neoforge.mods.toml` (rank 0,
+# permissive). `LICENSE` and `LICENSE-NOTICE.md` travel inside the package, and the
+# same two texts ride in the content half as `data/naturesaura/license/`. Local-only
+# until the maintainer approves publishing (ARCHITECTURE.md §8).
+id = "naturesaura"
+name = "Nature's Aura"
+version = "0.2.0"
+description = """A port of Nature's Aura for Horizon: the chunk aura store (1,000,000 at the base plus
+its drain spots), the aura bloom that fills 150,000 aura once when it appears, and the nature's
+altar — its 9x4x9 multiblock, its 500,000-aura container, 300 aura a tick pulled from the area it
+stands in, and its three catalyst-free transmutations. The other 74 blocks, 142 items, 31
+catalyst recipes, the RF converter and the client aura overlay are not ported yet."""
+authors = ["Ellpeck", "AdLf0208"]
+# The content API: exact and checked. This package ships carried content beside its code, so the
+# capability is a real claim; it is also the one value the manifest schema has.
+api = "0.2"
+# The installation side, not the hook's: an integrated server belongs to the client
+# installation, so a LAN host or a single-player world needs both.
+side = "both"
+capabilities = ["registries"]
+
+[native]
+game = "26.3"
+horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

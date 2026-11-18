@@ -1,0 +1,162 @@
+# Validation ladder — Nature's Aura slice 1
+
+Pin: Horizon `1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9`, horizon-mixins
+`5a64af938ec86b00d53d16a408aabc0038fb3e57` (schema 6). Minecraft 26.3.
+Every build/test step ran inside a slot lease (`ports/tools/build-slot.sh`,
+which forwarded the compile steps to the second machine); `CARGO_INCREMENTAL=0`;
+no `--target-dir` of my own.
+
+## 1. The pure runtime (standalone crate)
+
+```
+cargo test --locked --offline          -> 18 passed; 0 failed
+cargo clippy --all-targets --locked --offline -- -D warnings -> clean
+cargo fmt                              -> applied
+```
+
+**Red → green:** the first run failed 3 of 19 tests — the guessed multiblock
+counts (12 stone / 12 wood against the artefact's 16 / 20), a generation-cap case
+that exceeded the cap, and a ritual test that handed the altar exactly 15,000
+aura and could not pay the recipe's `ceil(15000/80) = 188` per tick over 80 ticks
+(15,040). Expectations #1 and #3 were corrected **from the artefact** (the
+`Multiblocks.ALTAR` rows and the over-spend arithmetic), then all 19 passed; the
+cap test and its helper were removed as unreached in this slice (recorded in
+`notes.md`).
+
+## 2. The module inside the game
+
+```
+python3 tools/horizon.py stage   -> stage_changed: true
+python3 tools/horizon.py check   -> cargo_exit 0, 0 warnings
+python3 tools/horizon.py test    -> cargo_exit 0, `game::naturesaura::tests`
+                                    18 passed; 0 failed; 0 warnings
+```
+
+`check` first failed with three real errors (an `i32`/`usize` mix-up in the
+readout and two double borrows of `game`), fixed before it passed. A second round
+of `check`/`test` after the e2e's click fix stayed at exit 0 / 0 warnings.
+
+## 3. Packages (`tools/package.sh`)
+
+```
+content/naturesaura.hmod  21,529 B
+                          sha256 07576a9ec727f18297c660e6cf41c4bf39a0553f9598ce91ede3db5b23193781
+                          53 entries, `no code: content only`
+naturesaura.hnmod         32,749 B
+                          sha256 d7237dd6aa551d5ae61674f607ff1c8c2b72d7adaf79f58c26674a26f2ae627b
+                          13 entries
+```
+
+The `.hnmod` carries `mixins/naturesaura/data/naturesaura-content.hmod`, the
+byte-identical copy of the built `.hmod` (`cmp` clean; `tools/package.py` refuses
+a stale copy). The `.hmod` rebuilt to the same SHA-256 across two runs.
+
+**Reproducibility caveat, measured:** the `.hnmod`'s *entries* are byte-identical
+to the bundle the e2e ran, but the zip container depends on the packager's zlib:
+packed on the second (test) machine it is 32,749 B / `d7237dd6…`, packed on this
+one 32,785 B / `bb7fa88d…`, with the same 13 names and the same 85,009
+uncompressed bytes. The delivered file is the one packed on the machine that ran
+the e2e; rebuild on that machine to reproduce its SHA-256. Its mtime was set after
+the last source touch because `cargo fmt` rewrote `runtime.rs` *after* that
+package run, and the packed `runtime.rs` (27,987 B) was then checked byte for byte
+against the formatted source — so the artifact corresponds to the delivered
+sources. The `.hmod` (built by `cargo-horizon-mod`, which writes its own
+deterministic zip) hashes the same on both machines.
+
+## 4. In-game e2e (three legs, one lease)
+
+`tools/e2e-all.sh` builds once and launches three times; the logs live in
+`ports/_shared/evidence/naturesaura/`:
+
+| Log | Leg | Verdict |
+|---|---|---|
+| `e2e-slice1.log` | `EMBEDDED=0`, `content/` as a dev mod | `PASS` + `EXIT:0` |
+| `e2e-embedded.log` | `EMBEDDED=1 CONTROL=1`, only the `.hnmod` | `PASS` + `EXIT:0` |
+| `e2e-selftest.log` | `SELFTEST=1`, the conservation assertion broken on purpose | `FAIL` + `EXIT:1` |
+
+```
+$ python3 ports/tools/check-e2e-logs.py naturesaura --strict
+ok       naturesaura            e2e-embedded.log           PASS + EXIT:0
+ok       naturesaura            e2e-selftest.log           FAIL + EXIT:1
+ok       naturesaura            e2e-slice1.log             PASS + EXIT:0
+logs=3  ok=3  missing-exit=0  bad-exit=0        (exit 0)
+```
+
+The default leg's transcript (abridged; the log keeps every line, and the
+`[naturesaura] altar click` lines show the hook's view of each click):
+
+```
+== A: an untouched chunk reads the base aura ==
+  Nature's Aura at 200, 200, 0 (radius 20): area=1000000 base=1000000 spots=0 count=0
+  Aura spot at 206, 200, -6: 0
+== B: an aura bloom stores exactly 150,000 aura, once ==
+  Aura spot at 206, 200, -6: 150000
+  Nature's Aura at 200, 200, 0 (radius 20): area=1150000 base=1000000 spots=150000 count=1
+  Aura spot at 206, 200, -6: 150000          (60 ticks later: it generates once)
+== C: an altar outside a multiblock does nothing ==
+  Nature's Altar at 210, 200, 6: complete=0 aura=0/500000 timer=0 recipe=none slot=minecraft:iron_ingot x1 area=1150000
+  Nature's Aura at 200, 200, 0 (radius 20): area=1150000 base=1000000 spots=150000 count=1
+== D: the complete altar turns an iron ingot into infused iron ==
+  Nature's Altar frame around 200, 200, 0: placed 48 blocks; area=1150000
+  Nature's Altar at 200, 200, 0: complete=1 aura=6900/500000 timer=0 recipe=none slot=empty area=1143100
+  Nature's Altar at 200, 200, 0: complete=1 aura=19008/500000 timer=9 recipe=minecraft:iron_ingot slot=minecraft:iron_ingot x1 area=1129300
+  Nature's Altar at 200, 200, 0: complete=1 aura=87560/500000 timer=0 recipe=none slot=naturesaura:infused_iron x1 area=1047400
+  area 1047400 + container 87560 = 1134960; the recipe spent 15040 of 1150000
+== E: an empty hand takes the infused iron off the altar ==
+  Nature's Altar at 200, 200, 0: complete=1 aura=99860/500000 timer=0 recipe=none slot=empty area=1035100
+  the infused iron is in the player's inventory
+== F: an altar in an area with no aura transmutes nothing ==
+  Nature's Aura at 200, 200, 0 (radius 20): area=-168500 base=1000000 spots=-1168500 count=2
+  Nature's Altar at 200, 200, 0: complete=1 aura=0/500000 timer=0 recipe=minecraft:iron_ingot slot=minecraft:iron_ingot x1 area=-168500
+PASS: … the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura
+EXIT:0
+```
+
+The embedded leg also proves the one-file install: its control run (the same
+binary, `.horizon-cache` made unusable) has **no bloom item** and the block stays
+`minecraft:air`, while the real run writes
+`.horizon-cache/naturesaura-embedded-content.hmod` (**21,529 B**, `cmp`-identical
+to `content/naturesaura.hmod`) and every id resolves.
+
+The selftest leg ends `FAIL: area + container (selftest, must fail) is 1134960,
+expected 1134961` and `EXIT:1` — the scenario can fail.
+
+## 5. The SDK migration (0.2.0, 2026-11-18)
+
+The retired `.hnmod` ladder above (§1–§4) is history: `tools/horizon.py`, `tools/package.py`
+and the staged tree are gone, and the in-game legs need a launcher-built game that is not
+installed here (`notes.md`, migration trap 15). What replaced them, measured in this tree:
+
+```
+# in a build-slot lease (BUILD_LOCAL=1 ports/tools/build-slot.sh run --job sdk-na …);
+# the commands run directly in the port, CARGO_INCREMENTAL=0, no --target-dir
+cargo test                                          -> 19 passed; 0 failed
+cargo clippy --all-targets -- -D warnings            -> exit 0, 0 warnings
+cargo fmt --check                                    -> clean
+rm -f Cargo.lock && cargo horizon-mod build          -> target/horizon-mod/naturesaura.hmod
+cargo horizon-mod check naturesaura.hmod             -> exit 0
+cargo horizon-mod fits naturesaura.hmod --build nightly -> exit 0
+```
+
+```
+naturesaura 0.2.0 (native-mod, format native-1/0b14f8acfd97fa2c750e42795249dcc981178ca4/e59da9094f0c2fdda6c627fe9eff22dec6a906f0, for 26.3)
+  53558 bytes, SHA-256 a64a5d8ff02b87b02c79787852e6f7c13f5ac91eee04e560ba03c236cf9c4f3c, unsigned
+```
+
+- **One package, 62 entries**, no `Cargo.lock`; `LICENSE` and `LICENSE-NOTICE.md` inside,
+  plus the two copies the content half carries under `data/naturesaura/license/`.
+- **`runtime.rs` byte-identical**: `unzip -p naturesaura.hmod src/runtime.rs | sha256sum` is
+  `fa7273e5d8a238447f93fb43f5ef7df094941e44a78d1dc1c3412d0f6029a393`, the retired
+  `mixins/naturesaura/runtime.rs` (`cmp` clean); its 19 tests ran **before** `src/lib.rs`
+  existed.
+- **Reproducible**: a second `cargo horizon-mod build` produced the same 53,558 B and the
+  same SHA-256.
+- **The content carry is unchanged**: re-running `tools/assemble_content.py` from the pack
+  jar (SHA-1 checked) rewrote the 52 carried files byte for byte, and
+  `tools/stamp_license.py` rewrote the two licence copies; `sdk-content-carry.log` is the
+  54-line `sha256sum` manifest.
+- **Not re-run**: the in-game e2e. `tools/e2e.sh`/`tools/e2e-all.sh` are kept unchanged; the
+  0.1.0 logs (§4) remain the behaviour's evidence for a runtime this migration did not
+  change.
+
+Skills: superpowers/using-superpowers,systematic-debugging,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
