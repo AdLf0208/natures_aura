@@ -1,11 +1,7 @@
 {
   "ingredients": [
-    {
-      "item": "minecraft:stone_bricks"
-    },
-    {
-      "item": "naturesaura:gold_fiber"
-    }
+    "minecraft:stone_bricks",
+    "naturesaura:gold_fiber"
   ],
   "result": {
     "id": "naturesaura:gold_brick"

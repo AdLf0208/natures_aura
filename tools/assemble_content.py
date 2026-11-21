@@ -134,19 +134,29 @@ SMALL_FLOWERS = {"values": [f"{MOD}:aura_bloom"]}
 # does not ship; an unknown tag is an empty ingredient, so it is written.
 CONVENTION_TAGS = {"data/c/tags/item/nuggets/gold.json": {"values": ["minecraft:gold_nugget"]}}
 
+def ingredient(value):
+    """One 1.21.1 ingredient object as 26.3's bare `id` / `#tag` string.
+
+    Both halves matter: a shaped recipe's `key` and a shapeless recipe's
+    `ingredients` list use the same object form in 1.21.1, and a leftover
+    `{"item": …}` is rejected at load by 26.3 (`recipes: invalid ingredient`),
+    so the recipe parses to nothing. A list of alternatives is already the 26.3
+    shape and is returned untouched.
+    """
+    if isinstance(value, dict) and "tag" in value:
+        return f"#{value['tag']}"
+    if isinstance(value, dict) and "item" in value:
+        return value["item"]
+    return value
+
+
 def upgrade_recipe(recipe: dict) -> dict:
     """The carry pipeline's 1.21.1 -> 26.3 ingredient upgrade."""
     for key, value in list(recipe.get("key", {}).items()):
-        if isinstance(value, dict) and "tag" in value:
-            recipe["key"][key] = f"#{value['tag']}"
-        elif isinstance(value, dict) and "item" in value:
-            recipe["key"][key] = value["item"]
+        recipe["key"][key] = ingredient(value)
     ingredients = recipe.get("ingredients")
     if isinstance(ingredients, list):
-        recipe["ingredients"] = [
-            f"#{value['tag']}" if isinstance(value, dict) and "tag" in value else value
-            for value in ingredients
-        ]
+        recipe["ingredients"] = [ingredient(value) for value in ingredients]
     return recipe
 
 

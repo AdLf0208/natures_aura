@@ -1,4 +1,4 @@
-# Nature's Aura — slice 1 notes
+# Nature's Aura — port notes (slice 1 · slice 2)
 
 **Mod:** Nature's Aura (`naturesaura`) 41.10, by Ellpeck, MIT.
 **Class / tier:** `content` / `deep` — but slice 1 is the **logic** shape of it:
@@ -9,9 +9,10 @@ energy.
 (`content/`, script-generated from the jar).
 **Licence:** MIT read from the jar (`META-INF/neoforge.mods.toml`), **rank 0**;
 local-only until the maintainer's approval (ARCHITECTURE.md §8).
-**Pin:** Horizon nightly **`0b14f8acfd97fa2c750e42795249dcc981178ca4`** (SDK,
-2026-11-18), horizon-mixins **`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**, launcher
-0.2.78; Minecraft 26.3. Before the migration (2026-11-18) the campaign pin was
+**Pin:** Horizon nightly **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** (slice 2,
+2026-11-21; slice 1 and the SDK migration ran at `0b14f8acfd97fa2c750e42795249dcc981178ca4`),
+horizon-mixins **`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`**, launcher 0.2.92; Minecraft 26.3.
+Before the migration (2026-11-18) the campaign pin was
 `1d63e0a5a37a7a708eb0b32b49bf0dfeb28ed8a9` / mixins `5a64af938ec86b00d53d16a408aabc0038fb3e57`.
 **Jar:** `ports/_shared/licence-cache/NaturesAura-41.10.jar`, SHA-1
 `58e4f9a07e5320432d11aaa3d876337edeeeb8db` (the pack record's), **kept**.
@@ -23,10 +24,155 @@ analysis clone was `/tmp/opencode/naturesaura-upstream` (not shipped).
 `horizon-mod.toml`, `Cargo.toml`, `src/lib.rs` (one `impl Hooks` plus three Parts),
 `src/runtime.rs`, `assets/` and `data/`. See
 [`## Migration to the SDK format`](#migration-to-the-sdk-format) for the file map,
-the hook table and every trap. `src/runtime.rs` is **byte-identical** to the retired
+the hook table and every trap. `src/runtime.rs` was byte-identical to the retired
 `mixins/naturesaura/runtime.rs` (sha256
-`fa7273e5d8a238447f93fb43f5ef7df094941e44a78d1dc1c3412d0f6029a393`), including the
-file inside the built package.
+`fa7273e5d8a238447f93fb43f5ef7df094941e44a78d1dc1c3412d0f6029a393`) at migration; the
+2026-11-18 review fixes added `may_inspect` and `transfer_is_complete` (sha256
+`0a11dfcc402170321a317421f7eaaebc5f0fd96f76799ba71bd8d489a35dc08d`, the same inside the
+package).
+
+## Slice 2 (2026-11-21) — the carried recipes, and the 1.21.1 dialect they arrived in
+
+**Version 0.2.2**: 54,908 B, sha256 `be31234c0485c8873071b0a4ff2f1568dc23bbc3a35a96a1140fe61d8d978143`,
+62 entries, no `Cargo.lock`. Pin **`0a875da`** / mixins `e59da909…`, launcher 0.2.92.
+`src/runtime.rs` is unchanged (`0a11dfcc402170321a317421f7eaaebc5f0fd96f76799ba71bd8d489a35dc08d`,
+the same inside the package); this slice is content, its proof, and the carry tool that made it.
+
+### Why this slice
+
+`FINDINGS.md` §3 carries "the two crafting recipes that make the multiblock's gold
+bricks reachable from vanilla (`gold_fiber` from gold nuggets + short grass + leaves,
+`gold_brick` from stone bricks + gold fiber)". The parity rule (2026-11-20) says a
+carried recipe that is never crafted is dead data, and neither recipe had ever been
+crafted. This is the **data half** of a `deep`-tier port: no hook, no machine, no
+renderer, no new API — exactly the shape the tier allows for carried content.
+
+### The defect: a carry error, not an upstream defect
+
+The Java mod is correct (its 1.21.1 JSON is what 1.21.1 expects). The **carry
+pipeline** was not: `tools/assemble_content.py`'s `upgrade_recipe` rewrote a shaped
+recipe's `key` from the 1.21.1 object form (`{"item": …}` / `{"tag": …}`) to 26.3's
+bare strings, but its shapeless branch turned only `{"tag": …}` into `"#tag"` and
+left `{"item": …}` untouched:
+
+```python
+recipe["ingredients"] = [
+    f"#{value['tag']}" if isinstance(value, dict) and "tag" in value else value
+    for value in ingredients
+]
+```
+
+So `data/naturesaura/recipe/gold_brick.json` shipped — and 0.2.0/0.2.1 delivered — in
+the 1.21.1 dialect. 26.3 refuses that ingredient at load and the recipe returns
+nothing, silently: `cargo horizon-mod check`, `fits` and all 21 unit tests are green
+on the dead recipe. Same class as the `mekanism`, `modularrouters` and `xnet` fixes of
+2026-11-21.
+
+### Red, before the fix (verbatim)
+
+Static, on the delivered 0.2.1 package (`evidence/naturesaura/data-shape-red.log`):
+
+```
+$ python3 ports/naturesaura/tools/data_shape.py naturesaura.hmod
+  FAIL naturesaura.hmod:data/naturesaura/recipe/gold_brick.json: minecraft:crafting_shapeless ingredient(s) in the 1.21.1 object form: {"item": "minecraft:stone_bricks"}, {"item": "naturesaura:gold_fiber"}
+  ok   naturesaura.hmod:data/naturesaura/loot_table/blocks/aura_bloom.json: loot pool uses the 26.3 condition form
+  ...
+EXIT:1
+```
+
+In game, on a launcher-built game carrying the pre-fix tree
+(`evidence/naturesaura-e2e/e2e-red.log`, EXIT:1):
+
+```
+== G: the two carried recipes craft in a real crafting table ==
+  the server rejected these ingredients at load:
+  [04:11:19] [load-items/ERROR]: recipes: invalid ingredient (unresolved tag or malformed input): {"item":"minecraft:stone_bricks"}
+  FAIL gold brick: stone bricks and gold fiber, shapeless: expected 1 naturesaura:gold_brick, got None
+  gold fiber: 4 leaves, 4 gold nuggets and short grass around the centre, four at a time -> {"count": 4, "item": "naturesaura:gold_fiber", "slot": 200}
+  gold brick: stone bricks and gold fiber, shapeless -> null
+    grid: [{"count": 1, "item": "minecraft:stone_bricks", "slot": 100}, ..., {"count": 1, "item": "naturesaura:gold_fiber", "slot": 104}, ...]
+FAIL: the crafting-table recipe check failed
+```
+
+The shaped recipe already crafted (it was in the right dialect); only the shapeless
+one was dead, which is why the defect survived slice 1.
+
+### The fix
+
+- `tools/assemble_content.py`: one `ingredient(value)` helper used by both the shaped
+  `key` and the shapeless `ingredients` list — `tag` → `"#tag"`, `item` → `"id"`, a
+  list (26.3's alternative form) untouched. The generator is the data's source, so
+  the fix is durable.
+- Re-ran `assemble_content.py` from the kept jar (`SHA-1 58e4f9a0…`, checked by the
+  tool) and `stamp_license.py`. **Exactly one of the 52 carried files changed**
+  (`diff -rq` over the old and new trees): `data/naturesaura/recipe/gold_brick.json`.
+  Every other file is byte-for-byte the same carry (`evidence/naturesaura/content-carry.log`).
+- `tools/data_shape.py` (new): the dialect as a check over a package or a data dir,
+  failing on a 1.21.1 ingredient and on a plural loot `conditions` array.
+- `tools/craft_check.py` (new) and phase G of `tools/e2e.sh`: both carried recipes
+  crafted in a real table, in survival, asserting id, count, the grid emptied, the
+  distinctive ingredient consumed, and **two wrong-ingredient controls** that craft
+  nothing (so the table cannot be passing on anything handed to it).
+- Phase H/I of `tools/e2e.sh` close the rest of the package's parity gap: all seven
+  items given and read back (unknown item refused), all four blocks placed and read
+  back (unknown block refused), and all four loot tables dropping their block when
+  broken, with vanilla stone as the harness's differential.
+
+### Green, the delivered 0.2.2
+
+| Check | Command | Result |
+|---|---|---|
+| Runtime tests | `cargo test` | **21 passed**, 0 failed (`evidence/naturesaura/sdk-test.log`) |
+| Lints | `cargo clippy --all-targets -- -D warnings` | exit 0, 0 warnings (`sdk-clippy.log`) |
+| Formatting | `cargo fmt --check` | clean (`sdk-fmt.log`) |
+| Package, twice | `rm -f Cargo.lock && cargo horizon-mod build` ×2 | 54,908 B, `cmp`-identical (`sdk-build.log`) |
+| Registry check | `cargo horizon-mod check naturesaura.hmod` | `naturesaura 0.2.2 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, **54908 bytes**, sha256 `be31234c…8143`, exit 0 (`sdk-check.log`) |
+| Fits the pin | `cargo horizon-mod fits … --build 0a875da` | `0a875da  made for` (`sdk-fits.log`) |
+| Fits another build | `cargo horizon-mod fits … --build 0b14f8a` | `0b14f8a  fits` (`sdk-fits-other.log`) |
+| Package gate | `verify-sdk-package.py naturesaura` | **1/1** |
+| In-game | `launcher-game.sh build` + `build-slot.sh run --step e2e -- tools/e2e.sh` | `PASS` + **`EXIT:0`** (`evidence/naturesaura-e2e/e2e-launcher.log`) |
+| Control | same run with `GAME=CONTROL_GAME CONTROL=1` | `Unknown or incomplete command` / `Unknown block type` → `FAIL` + **`EXIT:1`** (`e2e-launcher-control.log`) |
+| Can fail | `SELFTEST=1` | `FAIL: area + container (selftest, must fail) …` + **`EXIT:1`** (`e2e-selftest.log`) |
+| Log gate | `check-e2e-logs.py naturesaura-e2e --strict` | 4 logs, ok=4, exit 0 |
+| Dialect | `data_shape.py` on the tree and the package | every recipe/loot file in the 26.3 dialect (`data-shape-green.log`) |
+
+Green phase G, verbatim:
+
+```
+== G: the two carried recipes craft in a real crafting table ==
+  gold fiber: 4 leaves, 4 gold nuggets and short grass around the centre, four at a time -> {"count": 4, "item": "naturesaura:gold_fiber", "slot": 200}
+  gold brick: stone bricks and gold fiber, shapeless -> {"count": 1, "item": "naturesaura:gold_brick", "slot": 200}
+  gold fiber with dirt where the short grass goes -> null
+  gold brick with stone where the gold fiber goes -> null
+  both carried recipes craft their declared id and count, the grid empties,
+  each distinctive ingredient is consumed, and two wrong-ingredient controls craft nothing
+```
+
+### Coverage (parity rule, 2026-11-20)
+
+| Family in the jar | In 0.2.2 | Status | Proof |
+|---|---|---|---|
+| crafting recipes (246 in the jar) | 2 carried: `gold_fiber` (shaped), `gold_brick` (shapeless) | **tested** | phase G: ids, counts, grid emptied, ingredients consumed; two wrong-ingredient controls craft nothing; pre-fix leg fails the same phase |
+| loot tables (79 in the jar) | 4 carried | **tested** | phase I: each drops itself; vanilla stone drops as the differential |
+| blockstates (78 in the jar) | 4 carried blocks | **tested** | phases B (bloom places, 150,000 aura), C/D (altar places/forms), H (all four place + read back); unknown block refused |
+| item models (149 in the jar) | 7 carried items | **tested** | phase H: each given and read back; unknown item refused |
+| altar recipes (36 in the jar) | the 3 catalyst-free (`iron_ingot`→`infused_iron`, `stone`→`infused_stone`, `gold_ingot`→`tainted_gold`) | **partly tested** | `infused_iron` crafted in game (phase D, 15,040 aura, 80 ticks, conservation); all three rules and costs unit-tested (`only_the_catalyst_free_altar_recipes_are_known`, `a_recipe_costs_its_aura_rounded_up_per_tick`); the other two are not individually in-game |
+| multiblock (`Multiblocks.ALTAR`, 9x4x9) | 1 | **tested** | phase D: `placed 48 blocks`, `complete=1`, one ritual run with area+container conservation |
+| commands | 6 (`aura`, `spot`, `altar`, `altar-build`, `drain`, `altar-aura`) | **tested** | phases A–F parse each parsed reply |
+| chunk aura attachment | 1 (drain spots) | **tested** | phase B (150,000 once, not twice), phase F (deficit ⇒ no transmute) |
+| block tags | 4 `altar_*` + `c:nuggets/gold` | **tested** | the multiblock forms from the tagged blocks; `gold_fiber` crafts from `#c:nuggets/gold` and `#minecraft:leaves` |
+| creative tab | 1 | **not asserted** | registration only; no gameplay claim |
+| the other 74 blocks, 142 items, 31 catalyst recipes, worldgen, guide book, RF converter, generators, client overlay | — | **not ported** | `FINDINGS.md` §3.1 (later slices) |
+
+### Carry error fixed (recorded here, not as an upstream defect)
+
+The Java mod is correct; the defect was introduced by this campaign's carry step. The
+minimal fix is in the generator, the data is regenerated from the jar, and the red
+leg above is the proof that would have stayed red without it. Nothing about the mod's
+behaviour changed — the recipe now works as its author wrote it. Worth an upstream
+report: no.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
 ## The slice boundary (and why)
 
@@ -355,3 +501,25 @@ job owns no submission.
 | Content carry unchanged | re-ran `assemble_content.py` + `stamp_license.py` | the 52 carried files byte for byte, plus the two licence copies (`sdk-content-carry.log`) |
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
+## Review fixes (2026-11-18)
+
+`var/review-all/1210-naturesaura.md`, both findings fixed; version **0.2.1** (54,918 B, sha256
+`7ff4203525ca1d9ff54cb42d324130d08b6ae2fb3a975a830dda5a2f9dbc3c0b`).
+
+- **Output destroyed by an incompatible hand (src/lib.rs:507).** The take path cleared the
+  altar's slot first and ignored what `ItemPlace::insert` took. It now fills the hand first and
+  clears the slot only for a full transfer, both in one transaction: a partial or zero insert
+  returns `Err`, the journal rolls the insert back, and the finished output stays. Rule:
+  `runtime::transfer_is_complete`, pinned by `only_a_full_transfer_clears_the_output` (a full
+  transfer, an incompatible hand, a partial insert, and an empty slot).
+- **Altar readout disclosure (src/lib.rs:570, :745).** `/naturesaura altar` named the altar's
+  current item and count at any loaded coordinates. It now needs an operator (permission ≥ 2) or
+  a player in the same level within 8 blocks; any other caller gets a generic refusal. Rule:
+  `runtime::may_inspect`, pinned by `an_altar_readout_needs_an_operator_reach_or_the_same_level`.
+
+Ladder: `cargo test` 21 passed; `cargo clippy --all-targets -- -D warnings` exit 0;
+`cargo fmt --check` clean; `cargo horizon-mod build` twice byte-identical; `check` and `fits`
+exit 0. In-game: `launcher-game.sh run naturesaura` → `PASS` + `EXIT:0`
+(`ports/_shared/evidence/naturesaura-e2e/e2e-launcher.log`); `GAME=$CONTROL_GAME` →
+`FAIL` (`naturesaura aura … Unknown or incomplete command`) + `EXIT:1`.

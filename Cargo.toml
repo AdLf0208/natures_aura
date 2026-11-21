@@ -5,7 +5,7 @@
 #
 # Cargo's name and version are not the mod's identity: horizon-mod.toml is.
 name = "naturesaura"
-version = "0.2.0"
+version = "0.2.2"
 edition = "2024"
 license = "MIT"
 description = "Nature's Aura for Horizon: the chunk aura store, the aura bloom and the nature's altar"

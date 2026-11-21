@@ -495,6 +495,25 @@ pub fn altar_complete(altar: [i32; 3], block_at: impl Fn([i32; 3]) -> String) ->
     })
 }
 
+/// How far a player without operator permission may be from an altar to read it.
+pub const INSPECT_RANGE: f64 = 8.0;
+
+/// `Commands.LEVEL_ADMINS`: the permission level that bypasses the reach check.
+pub const LEVEL_ADMINS: u8 = 2;
+
+/// Whether a caller may read an altar's contents: an operator, or a player in
+/// the same level within [`INSPECT_RANGE`] of the block.
+pub fn may_inspect(op: bool, same_level: bool, distance: f64) -> bool {
+    op || (same_level && distance <= INSPECT_RANGE)
+}
+
+/// Whether taking a finished output may clear the altar's slot: only a full
+/// transfer commits. An incompatible hand inserts nothing, and the old code
+/// still cleared the slot (the review finding).
+pub fn transfer_is_complete(count: u32, inserted: u32) -> bool {
+    count > 0 && count == inserted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,5 +836,21 @@ mod tests {
             !altar_complete(ALTAR, wrong),
             "stone is not in the altar stone tag"
         );
+    }
+
+    #[test]
+    fn an_altar_readout_needs_an_operator_reach_or_the_same_level() {
+        assert!(may_inspect(true, false, f64::MAX), "an operator");
+        assert!(may_inspect(false, true, 2.0), "a player in reach");
+        assert!(!may_inspect(false, true, 9.0), "out of reach");
+        assert!(!may_inspect(false, false, 1.0), "another level");
+    }
+
+    #[test]
+    fn only_a_full_transfer_clears_the_output() {
+        assert!(transfer_is_complete(3, 3));
+        assert!(!transfer_is_complete(3, 0), "an incompatible hand");
+        assert!(!transfer_is_complete(3, 2), "a partial insert");
+        assert!(!transfer_is_complete(0, 0), "nothing to take");
     }
 }

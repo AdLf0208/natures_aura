@@ -160,3 +160,54 @@ naturesaura 0.2.0 (native-mod, format native-1/0b14f8acfd97fa2c750e42795249dcc98
   change.
 
 Skills: superpowers/using-superpowers,systematic-debugging,test-driven-development,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
+## 6. Slice 2 (0.2.2, 2026-11-21): the carried recipes and their dialect
+
+Pin **`0a875da91dbb0fdcb7ba8c42c11341aa229af51a`** / mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, launcher 0.2.92. Every compile step ran in a
+`ports/tools/build-slot.sh` lease with `BUILD_LOCAL=1`, `CARGO_INCREMENTAL=0`, no
+`--target-dir`; the in-game legs ran through `launcher-game.sh build` + a leased
+`build-slot.sh run --step e2e`.
+
+**Red first.** `tools/data_shape.py` on the delivered 0.2.1 package exits 1 on
+`data/naturesaura/recipe/gold_brick.json` (`{"item": …}` ingredients), and a
+launcher-built game carrying the pre-fix tree logs
+`recipes: invalid ingredient (unresolved tag or malformed input): {"item":"minecraft:stone_bricks"}`
+and crafts no `naturesaura:gold_brick` (`evidence/naturesaura-e2e/e2e-red.log`, EXIT:1).
+The shaped `gold_fiber` recipe already crafted, which is why slice 1 missed it.
+
+**Fix.** `tools/assemble_content.py` now upgrades `{"item": …}` and `{"tag": …}` for a
+shapeless recipe's `ingredients` list as well as a shaped `key`; the data was
+regenerated from the kept jar. `diff -rq` over the before/after carry trees shows
+exactly one changed file, `recipe/gold_brick.json` — the other 51 are byte-for-byte
+the same. `tools/data_shape.py` and `tools/craft_check.py` are new; `tools/e2e.sh`
+gained phases G (the two recipes), H (items/blocks/unknown ids) and I (loot drops
+with a vanilla differential).
+
+```
+cargo test                                          -> 21 passed; 0 failed
+cargo clippy --all-targets -- -D warnings            -> exit 0, 0 warnings
+cargo fmt --check                                    -> clean
+rm -f Cargo.lock && cargo horizon-mod build          -> target/horizon-mod/naturesaura.hmod
+rm -f Cargo.lock && cargo horizon-mod build          -> cmp-identical
+cargo horizon-mod check naturesaura.hmod             -> exit 0
+cargo horizon-mod fits naturesaura.hmod --build 0a875da -> 0a875da  made for
+cargo horizon-mod fits naturesaura.hmod --build 0b14f8a -> 0b14f8a  fits
+python3 ports/tools/verify-sdk-package.py naturesaura -> 1/1
+```
+
+```
+naturesaura 0.2.2 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa229af51a/e59da9094f0c2fdda6c627fe9eff22dec6a906f0, for 26.3)
+  54908 bytes, SHA-256 be31234c0485c8873071b0a4ff2f1568dc23bbc3a35a96a1140fe61d8d978143, unsigned
+```
+
+- **62 entries**, no `Cargo.lock`; `src/runtime.rs` `0a11dfcc…` in tree and package
+  (unchanged this slice).
+- **In-game:** `PASS` + `EXIT:0` (`evidence/naturesaura-e2e/e2e-launcher.log`), the
+  control is `FAIL` + `EXIT:1` (`e2e-launcher-control.log`, unknown command and
+  unknown block without the package), the selftest is `FAIL` + `EXIT:1`
+  (`e2e-selftest.log`), and `check-e2e-logs.py naturesaura-e2e --strict` is 4/4.
+- **Dialect:** `data_shape.py` is green over `data/` and over the built package
+  (`evidence/naturesaura/data-shape-green.log`).
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices

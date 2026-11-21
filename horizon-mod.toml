@@ -13,12 +13,14 @@
 # until the maintainer approves publishing (ARCHITECTURE.md §8).
 id = "naturesaura"
 name = "Nature's Aura"
-version = "0.2.0"
+version = "0.2.2"
 description = """A port of Nature's Aura for Horizon: the chunk aura store (1,000,000 at the base plus
 its drain spots), the aura bloom that fills 150,000 aura once when it appears, and the nature's
 altar — its 9x4x9 multiblock, its 500,000-aura container, 300 aura a tick pulled from the area it
-stands in, and its three catalyst-free transmutations. The other 74 blocks, 142 items, 31
-catalyst recipes, the RF converter and the client aura overlay are not ported yet."""
+stands in, and its three catalyst-free transmutations. A hand takes a finished output only when it
+can hold the whole stack; `/naturesaura altar` needs an operator or a player within 8 blocks. The
+other 74 blocks, 142 items, 31 catalyst recipes, the RF converter and the client aura overlay are
+not ported yet."""
 authors = ["Ellpeck", "AdLf0208"]
 # The content API: exact and checked. This package ships carried content beside its code, so the
 # capability is a real claim; it is also the one value the manifest schema has.
@@ -30,5 +32,5 @@ capabilities = ["registries"]
 
 [native]
 game = "26.3"
-horizon = "0b14f8acfd97fa2c750e42795249dcc981178ca4"
+horizon = "0a875da91dbb0fdcb7ba8c42c11341aa229af51a"
 mixins = "e59da9094f0c2fdda6c627fe9eff22dec6a906f0"

@@ -24,15 +24,16 @@ use std::sync::OnceLock;
 use mod_api::{
     self, AttachmentCodec, AttachmentError, AttachmentType, BlockClick, BlockEntityEvent,
     BlockEntityPart, BlockEntityTickEvent, BlockEntityTicksEvent, BlockKey, BlockPart,
-    BlockUpdateFlags, Command, CommandArgumentValue, Compound, Flow, Hooks, Host, HostTransaction,
-    InteractionResult, ItemKey, ItemPlace, ItemResource, ItemStack, LevelRef, LevelSide,
-    ModBlockEntityView, ModContainer, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RunModCommandEvent, ServerHost, Tag, Text, UseItemOnEvent, UseWithoutItemEvent,
+    BlockUpdateFlags, Command, CommandArgumentValue, CommandSource, Compound, Flow, Hooks, Host,
+    HostTransaction, InteractionResult, ItemKey, ItemPlace, ItemResource, ItemStack, LevelRef,
+    LevelSide, ModBlockEntityView, ModContainer, RegisterCommandsEvent, Registrar,
+    RegistrationContext, RunModCommandEvent, ServerHost, Tag, Text, UseItemOnEvent,
+    UseWithoutItemEvent,
 };
 use runtime::{
     ALTAR_CHECK_TICKS, ALTAR_MAX_AURA, ALTAR_RADIUS, ALTAR_RECIPES, Altar, AltarPart,
-    BLOOM_GENERATED_AURA, ChunkAura, DEFAULT_AURA, GENERATE_RADIUS, altar_complete, altar_parts,
-    altar_recipe, recipe_at,
+    BLOOM_GENERATED_AURA, ChunkAura, DEFAULT_AURA, GENERATE_RADIUS, LEVEL_ADMINS, altar_complete,
+    altar_parts, altar_recipe, may_inspect, recipe_at, transfer_is_complete,
 };
 
 /// The aura bloom (`BlockAuraBloom("aura_bloom", …)`).
@@ -501,12 +502,20 @@ fn altar_click(
     }
     let resource = ItemResource::of(&stack);
     let count = stack.count();
+    // Fill the hand first and clear the slot only after a full transfer, in one
+    // transaction: an incompatible occupied hand inserts nothing, and a partial
+    // insert aborts the transaction (the journal rolls it back), so the finished
+    // output is never destroyed. The review finding: the old order cleared the
+    // slot and then ignored how much the hand took.
     let _ = host.transaction(|host, tx| {
+        let inserted = hand.insert(host, tx, &resource, count);
+        if !transfer_is_complete(count, inserted) {
+            return Err(());
+        }
         let entity = host.block_entity(level, pos).ok_or(())?;
         entity
             .set_item_slot(host, tx, ALTAR_SLOT, None)
             .map_err(|_| ())?;
-        let _ = hand.insert(host, tx, &resource, count);
         Ok::<(), ()>(())
     });
     Some(InteractionResult::Success)
@@ -621,6 +630,22 @@ impl Hooks for Mod {
                 Flow::Cancel
             }
             Some("altar") => {
+                // The readout names the altar's item and count: gate it like a
+                // reach, so another player's altar is not read from afar.
+                let Some(level) = level_of(host, invocation) else {
+                    feedback(host, format!("{pos:?} is not a mod block entity."));
+                    return Flow::Cancel;
+                };
+                if !may_read(&*host, event.source, level, pos) {
+                    feedback(
+                        host,
+                        format!(
+                            "You must be an operator or within {:.0} blocks of the altar.",
+                            runtime::INSPECT_RANGE
+                        ),
+                    );
+                    return Flow::Cancel;
+                }
                 let line = altar_readout(host, invocation, pos);
                 feedback(host, line);
                 Flow::Cancel
@@ -708,6 +733,34 @@ impl Hooks for Mod {
 // ---------------------------------------------------------------------------
 // The altar's readout and the harness's build helper
 // ---------------------------------------------------------------------------
+
+/// Whether this command source may read the altar at `pos`: an operator, or a
+/// player in the same level within [`runtime::INSPECT_RANGE`] of the block.
+fn may_read(host: &dyn ServerHost, source: &CommandSource, level: LevelRef, pos: [i32; 3]) -> bool {
+    let op = source.permission().level() >= LEVEL_ADMINS;
+    match source {
+        CommandSource::Player { player, .. } => {
+            let same_level = player.level(host) == Some(level);
+            let distance = player
+                .entity()
+                .position(host)
+                .map(|at| {
+                    let block = [
+                        f64::from(pos[0]) + 0.5,
+                        f64::from(pos[1]) + 0.5,
+                        f64::from(pos[2]) + 0.5,
+                    ];
+                    (0..3)
+                        .map(|axis| (at[axis] - block[axis]).powi(2))
+                        .sum::<f64>()
+                        .sqrt()
+                })
+                .unwrap_or(f64::MAX);
+            may_inspect(op, same_level, distance)
+        }
+        _ => op,
+    }
+}
 
 /// The altar's state as `/naturesaura altar` prints it: whether its multiblock is complete,
 /// its container, its recipe, its slot and the aura of the area.

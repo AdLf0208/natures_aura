@@ -1,51 +1,63 @@
 #!/usr/bin/env bash
-# In-game check for Nature's Aura slice 1: an aura bloom stores 150,000 aura in
-# its chunk's drain spots, and a nature's altar inside its multiblock pulls that
-# aura into its own container and turns an iron ingot into infused iron for
-# exactly the recipe's cost — while an altar outside a multiblock and an altar in
-# an area with no aura do nothing.
+# In-game check for Nature's Aura: the slice-1 aura loop **and** the two carried
+# crafting recipes.
 #
-# HISTORICAL since 2026-11-18: this scenario was written for the retired `.hnmod`
-# bundle (0.1.0) and a `content/` dev-mod root. The 0.2.0 SDK package carries code
-# and content in one `.hmod`, so a run needs a launcher-built game
-# (`horizon-launcher native-build .`); the 0.1.0 logs are the behaviour's evidence.
-# See notes.md, "Migration to the SDK format", trap 15. Kept unchanged on purpose.
+#  A-F  an aura bloom stores 150,000 aura in its chunk's drain spots, and a
+#       nature's altar inside its multiblock pulls that aura into its own
+#       container and turns an iron ingot into infused iron for exactly the
+#       recipe's cost — while an altar outside a multiblock and an altar in an
+#       area with no aura do nothing.
+#  G    both carried recipes craft in a real crafting table: their declared id
+#       and count, the grid emptied, the distinctive ingredient consumed, and two
+#       wrong-ingredient controls that craft nothing. The server's load log is
+#       asserted clean of `recipes: invalid ingredient`, because a recipe in the
+#       1.21.1 `{"item": …}` dialect parses to nothing and crafts nothing.
+#  H    every carried item is give-able and reads back, every carried block
+#       places and reads back, and an unknown id is refused.
+#  I    every carried loot table drops its block when broken, with a vanilla
+#       block as the harness's differential.
+#
+# The game is a launcher-built client that carries the flat `.hmod` (the SDK
+# format, 2026-11-18): no `--dev-mod`, because `assets/` and `data/` travel in
+# the same package as the code. The run is `--offscreen` (not `--headless`):
+# `click-slot`, which phase G needs, requires a renderer.
+#
+#   eval "$(ports/tools/launcher-game.sh env naturesaura)"
+#   ports/tools/build-slot.sh run --job e2e-naturesaura --port ports/naturesaura \
+#       --step e2e -- bash ports/naturesaura/tools/e2e.sh
+#
+# CONTROL=1 first launches the unmodded client of the same build (CONTROL_GAME)
+# and asserts the aura command and the bloom block are unknown there, so the
+# content demonstrably comes from this package; the same run then fails in
+# phase A (no `/naturesaura` command) and ends EXIT:1. SELFTEST=1 breaks the
+# conservation assertion on purpose (it must FAIL), proving the check can fail.
 #
 # Every mod command is typed with `ctl chat "/cmd"` because `ctl command` runs
 # the console path and bypasses the native `perform_command` hook.
 #
-# The Overworld, high above the terrain at x=200, z=0: a dirt floor at y=199 with
-# clear air above it. The altar stands at (200, 200, 0), which is where the
-# multiblock's pattern puts it; the bloom is planted at (206, 200, -6), six
-# blocks away and inside the altar's 20-block aura radius. The aura type is the
-# Overworld's, so the altar pulls aura (upstream pulls only in the Overworld and
-# the Nether).
-#
-# Default run (EMBEDDED=0): the game loads `content/` as a dev mod.
-# EMBEDDED=1: the game is launched with **only the native bundle** (no
-# `--dev-mod`) and the content comes from the bundle's embedded copy
-# (`mixins/<id>/data/…`, the AE2 pattern). The run also checks the file the
-# helper wrote, and CONTROL=1 (default with EMBEDDED) first launches the same
-# binary with `.horizon-cache` unusable, where the ids must be unknown.
-#
-# SELFTEST=1 breaks the conservation assertion on purpose (it must FAIL), proving
-# the scenario can fail.
+# The arena is the Overworld, high above the terrain at x=200, z=0: a dirt floor
+# at y=199 with clear air above it. The altar stands at (200, 200, 0), which is
+# where the multiblock's pattern puts it; the bloom is planted at (206, 200, -6),
+# six blocks away and inside the altar's 20-block aura radius. The crafting
+# table stands at (196, 200, 8), on the same floor and outside the frame.
 set -Eeuo pipefail
 export LC_ALL=C
 [ -z "${NA_DEBUG:-}" ] || set -x
 
-EMBEDDED=${EMBEDDED:-0}
-CONTROL=${CONTROL:-$EMBEDDED}
+CONTROL=${CONTROL:-0}
 SELFTEST=${SELFTEST:-0}
 KEEP=${KEEP:-0}
 
 CLONE=/home/adlf/Desktop/all_the_mods_10_rust_rewrite
 PORT=$CLONE/ports/naturesaura
-PIN_BIN=$CLONE/ports/_shared/bin/horizon-1d63e0a5
-CTL=${CTL:-$PIN_BIN/horizon-ctl}
-GAME=${GAME:-$PORT/target/horizon-cargo/fast/horizon-client}
+NEW_PIN_BIN=$CLONE/ports/_shared/bin/horizon-0a875da
+CTL=${CTL:-$NEW_PIN_BIN/horizon-ctl}
+GAME=${GAME:-}
+CONTROL_GAME=${CONTROL_GAME:-}
+HMOD=${HMOD:-$PORT/naturesaura.hmod}
 RES=${RES:-${HORIZON_RES:-/home/adlf/Desktop/horizon/.local/horizon-client/26.3}}
 SOCK=${SOCK:-/tmp/opencode/naturesaura-e2e.sock}
+EVIDENCE=$CLONE/ports/_shared/evidence/naturesaura-e2e
 WORLD=NatureAuraE2E
 CONTROL_WORLD=NatureAuraControl
 
@@ -61,6 +73,10 @@ BZ=-6
 CX=210
 CY=200
 CZ=6
+# The crafting table: on the same floor, clear of the altar's 9x4x9 frame.
+TX=196
+TY=200
+TZ=8
 # The chunk base every area read starts from, and what the bloom adds.
 DEFAULT_AURA=1000000
 BLOOM_AURA=150000
@@ -71,7 +87,15 @@ RECIPE_SPEND=$((AURA_PER_TICK * RECIPE_TICKS))
 TOTAL_AURA=$((DEFAULT_AURA + BLOOM_AURA))
 AREA_AFTER=$((TOTAL_AURA - RECIPE_SPEND))
 
-[ -x "$CTL" ] || { echo "missing horizon-ctl: $CTL" >&2; exit 1; }
+[ -x "$CTL" ] || {
+    echo "missing horizon-ctl: $CTL (eval \"\$(ports/tools/launcher-game.sh env naturesaura)\")" >&2
+    exit 1
+}
+[ -n "$GAME" ] || {
+    echo "missing GAME: point it at a launcher-built horizon-client that carries naturesaura" >&2
+    echo "  ports/tools/launcher-game.sh build naturesaura" >&2
+    exit 1
+}
 [ -x "$GAME" ] || { echo "missing horizon-client: $GAME" >&2; exit 1; }
 [ -d "$RES/assets" ] || { echo "missing prepared resources: $RES" >&2; exit 1; }
 
@@ -86,7 +110,15 @@ rm -f "$SOCK"
 
 ctl() { "$CTL" --socket "$SOCK" "$@"; }
 say() { ctl chat "/$1" >/dev/null; }
-fail() { echo "FAIL: $*" >&2; ctl logs --lines 80 >&2 || true; exit 1; }
+fail() {
+    echo "FAIL: $*" >&2
+    ctl logs --lines 80 >&2 || true
+    # The startup log is where the server says why a recipe did not load; a run
+    # that fails keeps it beside the transcript.
+    mkdir -p "$EVIDENCE"
+    cp "$HORIZON_HOME/logs/latest.log" "$EVIDENCE/game-latest.log" 2>/dev/null || true
+    exit 1
+}
 on_error() { echo "FAIL: line $1: '$2' exited $?" >&2; ctl logs --lines 40 >&2 || true; }
 trap 'on_error "$LINENO" "$BASH_COMMAND"' ERR
 
@@ -105,18 +137,15 @@ cleanup() {
 trap cleanup EXIT
 
 launch() { # launch [WORLD]
-    local world=${1:-$WORLD}
+    local world=${1:-${WORLD_NAME:-$WORLD}}
+    local game=${LAUNCH_GAME:-$GAME}
     rm -f "$SOCK"
     cd "$SCRATCH"
-    local args=(--game "$GAME" --world "$world" --seed 20261105 --creative --headless
-                --wait --resources "$RES")
-    if [ "$EMBEDDED" = 1 ]; then
-        echo "  launch: no --dev-mod; the bundle carries its own content" >&2
-    else
-        args+=(--dev-mod "$PORT/content")
-    fi
-    "$CTL" --socket "$SOCK" launch "${args[@]}" >/dev/null
-    ctl wait-ready 120
+    echo "  launch: $(basename "$game"), no --dev-mod: the package carries its content" >&2
+    "$CTL" --socket "$SOCK" launch \
+        --game "$game" --world "$world" --seed 20261105 --creative --offscreen --wait \
+        --resources "$RES" >/dev/null
+    ctl wait-ready 120 >/dev/null
     ctl wait 40
 }
 
@@ -218,45 +247,59 @@ expect() { # expect NAME GOT WANT
     [ "$2" = "$3" ] || fail "$1 is $2, expected $3"
 }
 
-# The control for EMBEDDED=1: the same binary with the embedded content made
-# unavailable — `.horizon-cache` is a plain file, so the helper can neither
-# compare nor write its content file and falls back to `Continue`. Every id must
-# then be unknown; if they resolve, the run proves nothing about the embedded file.
+# Break one block while standing two blocks away, and return the reply. The
+# caller asserts the drop; a block whose loot table is dead reports `drops: {}`.
+break_block() { # break_block X Y Z
+    local x=$1 y=$2 z=$3
+    ctl command "execute in minecraft:overworld run tp @s $((x - 2)).5 $y $((z)).5" >/dev/null
+    ctl wait 6 >/dev/null
+    ctl look-at-block "$x" "$y" "$z" >/dev/null 2>&1 || true
+    ctl wait 3 >/dev/null
+    ctl break "$x" "$y" "$z" || fail "cannot break the block at $x,$y,$z"
+}
+
+# The negative control: an unmodded client of the same build. The aura command
+# and the bloom block must be unknown there, so the content demonstrably comes
+# from this package and not from anything else on disk. The run then continues
+# into phase A, which fails without the command, so the leg ends EXIT:1.
 control_leg() {
-    echo "== control: the same game with no embedded content file =="
-    rm -rf "$SCRATCH/.horizon-cache"
-    : > "$SCRATCH/.horizon-cache"
-    launch "$CONTROL_WORLD"
+    if [ -z "$CONTROL_GAME" ]; then
+        echo "== control: skipped (set CONTROL_GAME=<unmodded client> to run it) =="
+        return
+    fi
+    [ -x "$CONTROL_GAME" ] || fail "missing CONTROL_GAME: $CONTROL_GAME"
+    echo "== control: the same build with no naturesaura =="
+    LAUNCH_GAME=$CONTROL_GAME WORLD_NAME=$CONTROL_WORLD launch
     arena
-    ctl command "item replace entity @s hotbar.0 with naturesaura:aura_bloom 1" >/dev/null || true
-    ctl wait 4 >/dev/null
-    ctl inventory | jq -e '[.hotbar[], .main[] | select(.item == "naturesaura:aura_bloom")] | length == 0' >/dev/null \
-        || fail "the control game has the bloom item, so the content did not come from the embedded file"
-    ctl command "execute in minecraft:overworld run setblock $BX $BY $BZ naturesaura:aura_bloom" >/dev/null || true
-    ctl wait 4 >/dev/null
-    local name
-    name=$(block_name "$BX" "$BY" "$BZ")
-    [ "$name" = "minecraft:air" ] || fail "the control game holds $name, so the block id was known"
-    [ -f "$SCRATCH/.horizon-cache" ] || fail "the control's .horizon-cache was replaced: the helper wrote its content"
-    echo "  without the embedded file: no bloom item, the block stayed $name"
+    local reply chat
+    # A player-chat command's answer arrives as a server message a tick later,
+    # not in the `ctl chat` reply (that only says the chat was sent).
+    ctl chat "/naturesaura aura $AX $AY $AZ 20" >/dev/null
+    ctl wait 8 >/dev/null
+    chat=$(ctl messages 8 | jq -r '.chat[]' | tr '\n' ' ')
+    echo "  /naturesaura aura chat: $chat"
+    case "$chat" in
+        *"Unknown"*|*"unknown"*|*"incomplete"*) ;;
+        *) fail "the control game answered a /naturesaura command: $chat" ;;
+    esac
+    case "$chat" in
+        *"Nature's Aura at"*) fail "the control game computed aura: $chat" ;;
+    esac
+    reply=$(ctl command "execute in minecraft:overworld run setblock $BX $BY $BZ naturesaura:aura_bloom")
+    echo "  setblock naturesaura:aura_bloom reply: $reply"
+    case "$reply" in
+        *"Unknown"*|*"unknown"*|*"error"*) ;;
+        *) fail "the control game knew naturesaura:aura_bloom: $reply" ;;
+    esac
+    [ "$(block_name "$BX" "$BY" "$BZ")" = "minecraft:air" ] \
+        || fail "the control game holds a bloom, so the block id was known"
+    echo "  without the package: no /naturesaura command, the bloom block stayed minecraft:air"
     ctl quit >/dev/null 2>&1 || true
-    rm -f "$SCRATCH/.horizon-cache"
 }
 
-# EMBEDDED=1: the bundle must have written its content out at startup, byte for
-# byte the delivered content mod.
-embedded_content_check() {
-    local cache=$SCRATCH/.horizon-cache/naturesaura-embedded-content.hmod
-    [ -f "$cache" ] || fail "the bundle did not write its embedded content to $cache"
-    cmp -s "$cache" "$PORT/content/naturesaura.hmod" \
-        || fail "the embedded content differs from content/naturesaura.hmod"
-    echo "  embedded content: $(wc -c < "$cache" | tr -d ' ') B at $cache, identical to content/naturesaura.hmod"
-}
-
-echo "== launch (Overworld arena, content + native bundle) =="
 if [ "$CONTROL" = 1 ]; then control_leg; fi
+echo "== launch (Overworld arena; one package, code and content together) =="
 launch
-if [ "$EMBEDDED" = 1 ]; then embedded_content_check; fi
 arena
 
 echo "== A: an untouched chunk reads the base aura =="
@@ -373,4 +416,97 @@ expect "the altar's container in an area with no aura" "$ALTAR_AURA" "$container
 expect "the altar's slot in an area with no aura" "$SLOT" "minecraft:iron_ingot x1"
 echo "  with area $AREA the altar took no aura and transmuted nothing"
 
-echo "PASS: a bloom stores exactly 150,000 aura once, an altar outside its multiblock and an altar in an area with no aura transmute nothing, and the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura"
+echo "== G: the two carried recipes craft in a real crafting table =="
+# A carried recipe whose ingredient is in the 1.21.1 object form
+# (`{"item": "…"}`) is rejected by the 26.3 parser at load, so the recipe is dead
+# data. The server names it once, at startup: print those lines as the
+# explanation, then let the crafting table be the assertion (and check the log
+# again afterwards, so a rejected recipe is a failure even if no craft below
+# happens to cover it).
+rejected=$(grep -a "recipes: invalid ingredient" "$HORIZON_HOME/logs/latest.log" || true)
+if [ -n "$rejected" ]; then
+    echo "  the server rejected these ingredients at load:" >&2
+    echo "$rejected" | sed 's/^/  /' >&2
+fi
+# Survival, so a craft consumes its ingredients; the player stands on the floor
+# the arena laid and the table is a fresh block entity every time.
+ctl command "gamemode survival @s" >/dev/null
+ctl command "clear @s" >/dev/null
+python3 "$PORT/tools/craft_check.py" "$SOCK" "$CTL" "$TX" "$TY" "$TZ" \
+    || fail "the crafting-table recipe check failed"
+ctl close >/dev/null 2>&1 || true
+ctl command "gamemode creative @s" >/dev/null
+ctl command "clear @s" >/dev/null
+ctl wait 3
+[ -z "$rejected" ] || fail "the server rejected a carried recipe ingredient (see the lines above)"
+
+echo "== H: every carried item is give-able, every block places and drops, unknown ids are refused =="
+for id in naturesaura:aura_bloom naturesaura:nature_altar naturesaura:gold_brick \
+          naturesaura:infused_stone naturesaura:infused_iron naturesaura:tainted_gold \
+          naturesaura:gold_fiber; do
+    ctl command "clear @s" >/dev/null
+    ctl give "$id" 1 >/dev/null || fail "give $id failed"
+    ctl wait 3
+    held=$(ctl inventory | jq -r --arg i "$id" '.counts[$i] // 0')
+    [ "$held" -ge 1 ] || fail "$id is not in the inventory after give ($held)"
+done
+echo "  all seven carried items read back from the inventory"
+# Four blocks on the arena floor, each read back after placement.
+ctl command "execute in minecraft:overworld run setblock $((AX - 6)) $AY $((AZ + 8)) naturesaura:aura_bloom" >/dev/null
+ctl command "execute in minecraft:overworld run setblock $((AX - 4)) $AY $((AZ + 8)) naturesaura:infused_stone" >/dev/null
+ctl command "execute in minecraft:overworld run setblock $((AX - 2)) $AY $((AZ + 8)) naturesaura:gold_brick" >/dev/null
+ctl command "execute in minecraft:overworld run setblock $AX $AY $((AZ + 8)) naturesaura:nature_altar" >/dev/null
+ctl wait 6
+for pair in "naturesaura:aura_bloom $((AX - 6))" "naturesaura:infused_stone $((AX - 4))" \
+            "naturesaura:gold_brick $((AX - 2))" "naturesaura:nature_altar $AX"; do
+    set -- $pair
+    [ "$(block_name "$2" "$AY" $((AZ + 8)))" = "$1" ] || fail "$1 did not place"
+done
+echo "  aura_bloom, infused_stone, gold_brick and nature_altar each placed and read back"
+unknown=$(ctl command "give @s naturesaura:not_an_item 1" | jq -r '.chat[]?' | tr '\n' ' ')
+echo "  give naturesaura:not_an_item: $unknown"
+case "$unknown" in
+    *"Unknown item"*|*"unknown item"*|*"not found"*) ;;
+    *) fail "an unknown naturesaura item was accepted: $unknown" ;;
+esac
+unknown=$(ctl command "execute in minecraft:overworld run setblock $((AX - 6)) $AY $((AZ + 9)) naturesaura:not_a_block" | jq -r '.chat[]?' | tr '\n' ' ')
+echo "  setblock naturesaura:not_a_block: $unknown"
+case "$unknown" in
+    *"Unknown"*|*"unknown"*|*"error"*) ;;
+    *) fail "an unknown naturesaura block was accepted: $unknown" ;;
+esac
+
+echo "== I: every carried loot table drops its block, with a vanilla block as the differential =="
+ctl command "gamemode survival @s" >/dev/null
+ctl command "clear @s" >/dev/null
+ctl command "item replace entity @s hotbar.0 with minecraft:iron_pickaxe 1" >/dev/null
+ctl wait 3
+ctl select 1 >/dev/null
+# The vanilla block first: a break that reports no drop at all would make the
+# mod blocks' assertions meaningless, so the harness proves itself on a block
+# whose loot table ships with the game.
+ctl command "execute in minecraft:overworld run setblock $((AX - 8)) $AY $((AZ + 8)) minecraft:stone" >/dev/null
+ctl wait 4
+reply=$(break_block $((AX - 8)) "$AY" $((AZ + 8)))
+echo "  vanilla stone: $reply"
+# Vanilla stone's loot table yields cobblestone, not stone: the assertion is that
+# the break path reports *a* drop at all, so the differential proves the harness.
+got=$(jq '[.drops[]] | add // 0' <<<"$reply")
+[ "$got" -ge 1 ] || fail "the vanilla control block dropped nothing: $reply"
+# The four carried blocks; the bloom is hand-breakable, the other three need the
+# iron pickaxe held above.
+for pair in "naturesaura:aura_bloom $((AX - 6))" "naturesaura:infused_stone $((AX - 4))" \
+            "naturesaura:gold_brick $((AX - 2))" "naturesaura:nature_altar $AX"; do
+    set -- $pair
+    reply=$(break_block "$2" "$AY" $((AZ + 8)))
+    echo "  $1: $reply"
+    got=$(jq -r --arg d "$1" '.drops[$d] // 0' <<<"$reply")
+    [ "$got" -ge 1 ] || fail "$1 dropped $got of itself: $reply"
+    [ "$(block_name "$2" "$AY" $((AZ + 8)))" = "minecraft:air" ] \
+        || fail "the broken $1 is still there"
+done
+ctl command "gamemode creative @s" >/dev/null
+ctl command "clear @s" >/dev/null
+echo "  all four carried loot tables dropped their block"
+
+echo "PASS: a bloom stores exactly 150,000 aura once, an altar outside its multiblock and an altar in an area with no aura transmute nothing, the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura, both carried recipes craft their declared id and count in a real table with the grid emptied and the distinctive ingredient consumed while two wrong-ingredient controls craft nothing, the load log has no rejected ingredient, all seven carried items read back, all four carried blocks place and drop themselves with a vanilla stone as the drop differential, and unknown ids are refused"
