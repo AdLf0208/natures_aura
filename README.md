@@ -1,8 +1,9 @@
-# Nature's Aura for Horizon — slices 1–3
+# Nature's Aura for Horizon — slices 1–4
 
 A native Horizon port of [Nature's Aura](https://github.com/Ellpeck/NaturesAura)
 41.10 (MIT) by Ellpeck. It implements one complete aura/ritual loop, the carried
-recipes and materials, and the grass-death drain-spot effect. Since 2026-11-18 it
+recipes and materials, and the grass-death drain-spot effect's grass and leaf
+branches. Since 2026-11-18 it
 is one **flat SDK package** (`naturesaura.hmod`, `api = "0.2"`), which carries the
 code, `assets/` and `data/` together.
 
@@ -26,13 +27,16 @@ code, `assets/` and `data/` together.
   `stone_bricks + gold_fiber -> gold_brick`).
 - **Grass death** (`GrassDieEffect`): once a running second, a spot whose amount
   is negative *and* whose radius-50 area aura is below zero turns grass into
-  coarse dirt; a spot at zero or above leaves the grass alone.
+  coarse dirt and vanilla leaves into `naturesaura:decayed_leaves`; a spot at zero
+  or above leaves them alone. The carried `decayed_leaves` block drops itself only
+  to silk touch, as upstream's loot table declares.
 
 ## What does not work yet (by design — see `FINDINGS.md` §3.1)
 
-The mod's other 74 blocks and 142 items, the other drain-spot effects (plant
-boost, ore spawn, nether decay and the leaf/bush/nether-grass branches of grass
-death), the aura containers for items (`aura_bottle`, `aura_cache`), the RF converter, the
+The mod's other blocks and items, the other drain-spot effects (plant boost, ore
+spawn, nether decay and the bush/nether-grass branches of grass death, including
+the decayed leaves' random-tick decay to air), the aura containers for items
+(`aura_bottle`, `aura_cache`), the RF converter, the
 other aura generators, the tree ritual, the offering table, the altars of
 birthing, worldgen for the bloom, and the guide book. The altar's 31 catalyst
 recipes need the catalyst blocks, which are a later slice; the altar has no
@@ -68,14 +72,14 @@ upstream's `canExtract` refuses an input too).
 ## Building
 
 ```
-cargo test                                        # the pure rules, 25 tests
+cargo test                                        # the pure rules, 26 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 rm -f Cargo.lock                                  # see notes.md, migration trap 5
 cargo horizon-mod build                           # -> target/horizon-mod/naturesaura.hmod
 cp target/horizon-mod/naturesaura.hmod ./naturesaura.hmod
 cargo horizon-mod check naturesaura.hmod
-cargo horizon-mod fits naturesaura.hmod --build nightly
+cargo horizon-mod fits naturesaura.hmod --build 0a875da
 ```
 
 `cargo horizon-mod` fetches `.horizon/sdk/` on first use (gitignored, never packed).

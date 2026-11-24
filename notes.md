@@ -723,24 +723,200 @@ was introduced, so `fits` was not false-failed.
 
 Skills: superpowers/using-superpowers,writing-plans,verification-before-completion; BeautifulRust/rust-best-practices
 
+## Slice 4 (2026-11-24) — the leaf branch of `GrassDieEffect` (0.2.5)
+
+**Version 0.2.5** (patch of the 0.2.4 staged on PR #1859). Pin unchanged:
+`0a875da91dbb0fdcb7ba8c42c11341aa229af51a` / mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, launcher 0.2.92, for 26.3.
+Every Rust step ran in a `build-slot.sh` lease **forwarded to `AdLf-PC`**
+(no `BUILD_LOCAL=1`); the game legs stayed local through `launcher-game.sh build`
++ a leased `--step e2e`.
+
+### The gap, the slice and why it fits
+
+The previous `## Next slice` named this exact family, from `FINDINGS.md` §3.1's
+"the aura drain-spot passive effects (`chunk/effect/*`: plant boost, grass
+death, ore spawn, nether decay …)" and slice 3's choice table row "grass death's
+other branches … the mod's decayed-leaves block is not carried". It is the
+cheapest remaining family: the negative-spot/negative-area threshold, the
+once-every-20-ticks driver and the deterministic target set already live in
+`runtime.rs`/`lib.rs`, and the glue already writes whatever
+`grass_die_replacement` returns — so this slice is one more branch plus its
+block, with no new machine, renderer or API. `deep` tier, no tier change.
+**Plant boost stays not ported**: the pin exposes `level_bone_meal` only on the
+hidden `LevelsBackendMut`, with no public `ServerHost` wrapper, so a mod cannot
+bonemeal an arbitrary position.
+
+### The branch, read from the artefact first
+
+`de/ellpeck/naturesaura/chunk/effect/GrassDieEffect.java` at tag `41.10` =
+`70b93d37037f3559312834f0f42e824431090b64` (the commit in this file's header),
+fetched from the upstream raw file and read before any edit. `update` checks
+`calcValues` (the same `spot < 0 && area < 0`, `amount = min(300,
+ceil(|aura|/100000/spotCount))`, `amount > 1`, `dist = clamp(|aura|/75000,5,75)`),
+then for each scattered target within `dist`:
+
+```java
+if (block instanceof LeavesBlock) {
+    newState = ModBlocks.DECAYED_LEAVES.defaultBlockState();
+} else if (block instanceof GrassBlock) {
+    newState = Blocks.COARSE_DIRT.defaultBlockState();
+}
+```
+
+`getDisplayIcon()` also returns `DECAYED_LEAVES`. The artefact's exact target
+set is therefore every `LeavesBlock`; at this pin the public SDK has no
+class/tag test inside a tick, so the port matches the **14 vanilla leaves ids**
+measured from the prepared 26.3 resources' `assets/minecraft/blockstates/*_leaves.json`
+(`acacia`, `azalea`, `birch`, `cherry`, `dark_oak`, `flowering_azalea`, `jungle`,
+`mangrove`, `oak`, `orange_poplar`, `pale_oak`, `red_poplar`, `spruce`,
+`yellow_poplar`, all under `minecraft:`), pinned by a test that writes those ids
+out independently of the implementation's constant. Decayed leaves themselves
+extend `BlockImpl`, not `LeavesBlock`, so a second pass leaves them alone.
+
+`BlockDecayedLeaves.java` at the same tag reads `Properties.of().strength(0.2F)
+.sound(SoundType.GRASS).noOcclusion().randomTicks()` — a single-state block. Its
+loot table drops itself only to silk touch, and its `randomTick` turns it to air.
+The port carries the block and its silk-touch loot table; the **random-tick decay
+is not ported** (no such hook in this slice, and the in-game assertion needs the
+block to persist), recorded below.
+
+### Red, before the glue (verbatim)
+
+`cargo test` on the new test with `grass_die_replacement` still grass-only
+(`ports/_shared/evidence/naturesaura/effect-leaf-red.log`, slot exit 101):
+
+```
+test runtime::tests::grass_die_turns_leaves_into_decayed_leaves ... FAILED
+---- runtime::tests::grass_die_turns_leaves_into_decayed_leaves stdout ----
+thread 'runtime::tests::grass_die_turns_leaves_into_decayed_leaves' (950304) panicked at src/runtime.rs:1036:13:
+assertion `left == right` failed: leaves id minecraft:acacia_leaves
+  left: None
+ right: Some("naturesaura:decayed_leaves")
+test result: FAILED. 25 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Green: the same test passes after `LEAVES_BLOCKS` and the leaf branch are
+written (`effect-leaf-green.log`), `cargo test` **26 passed, 0 failed**; the
+glue (`grass_die_at`) needed no change — it already reads `grass_die_replacement`
+and resolves the id to a state.
+
+### Carry and deviations
+
+`tools/assemble_content.py` now carries `decayed_leaves` from the kept jar
+(SHA-1 `58e4f9a0…b8db`, checked by the tool): its blockstate, block/item models,
+texture, item definition, loot table (upgraded to 26.3's singular `condition`),
+creative-tab entry and a filtered `data/minecraft/tags/block/leaves.json` —
+**8 new files**, with only the creative tab changed among the old ones
+(`leaf-carry.log`). `stamp_license.py` re-ran, so both packed licence copies
+keep the reviewer's exact first line `Copyright (c) 2021 Ellpeck`.
+
+- **Single-state template.** The artefact's blockstate is one `""` variant
+  (a plain `BlockImpl`, not a `LeavesBlock`), so the declaration uses
+  `minecraft:stone` with `occludes: false`, hardness/resistance `0.2` and grass
+  sounds — not `minecraft:oak_leaves`, whose template's `distance`/`persistent`/
+  `waterlogged` states would not match the jar's variant. The model still uses
+  the jar's `cutout_mipped` leaves look.
+- **No random-tick decay.** Upstream's `randomTick` sets the block to air; no
+  random-tick hook ships in this slice, so the carried block persists. Recorded
+  as a gap, not a silent fix.
+- **Id set, not `instanceof`.** Modded leaves outside the 14 vanilla ids are not
+  targets; the e2e's oak leaves are, and the exact set is documented above.
+- **Deterministic scatter** and **chunk discovery** are slice 3's deviations,
+  unchanged.
+
+### In-game assertion (phase K, fail-capable)
+
+Two `minecraft:oak_leaves[persistent=true]` blocks 100 blocks apart (so neither
+is in the other's 50-block area), 90 blocks from slice 3's grass spot. The first
+gets `/naturesaura drain 240 200 40 2500000` (spot `-2,500,000`, radius-50 area
+`-1,500,000`, count 1 → `amount 15`, `dist 20`); the second stays at spot 0.
+After 45 ticks the drained block reads `naturesaura:decayed_leaves` and the
+control still reads `minecraft:oak_leaves`. `SELFTEST=effect-leaf` asserts it is
+*still* oak leaves and ends `EXIT:1`; the unmodded control cannot run
+`/naturesaura drain` at all. Both the spot and the area are read with
+`/naturesaura spot` and `/naturesaura aura` before and after, so the threshold
+crossing is in the log. Verbatim from `e2e-launcher.log`:
+
+```
+== K: a drained spot turns leaves into decayed leaves; undrained leaves stay ==
+  Aura spot at 240, 200, 40: 0
+  Aura spot at 240, 200, 40: -2500000
+  Nature's Aura at 240, 200, 40 (radius 50): area=-1500000 base=1000000 spots=-2500000 count=1
+  Aura spot at 240, 200, 40: -2500000
+  spot -2500000, area -1500000: the drained leaves became decayed leaves while the undrained leaves stayed oak
+```
+
+The inverted leg fails with
+`FAIL: the drained leaves patch (selftest: must fail) is naturesaura:decayed_leaves, expected minecraft:oak_leaves`
+(`e2e-selftest-effect-leaf.log`, `EXIT:1`). Phase I also asserts the new loot
+table's silk-touch rule: a plain pickaxe drops nothing, a silk-touch pickaxe
+drops exactly one `naturesaura:decayed_leaves` — a differential that would fail
+if the loot condition were dropped. The five prior legs (aura/bloom/altar,
+recipes, items/blocks/unknown ids, loot, grass death) stayed green; H/I were
+extended from four to five blocks and seven to eight items.
+
+### Delivery and verification (0.2.5)
+
+`naturesaura.hmod` (in the port root, never `target/`): **62,307 B**, SHA-256
+`e8ac2549a9583b4750e7307ce6a1df93b73c11d1685415dd84f86bdfc2c13361`, **70
+entries**, no packed `Cargo.lock`. Two `rm -f Cargo.lock && cargo horizon-mod
+build` runs were `cmp`-identical and forwarded (`Compiling naturesaura v0.2.5`);
+`check` printed `naturesaura 0.2.5 … 62307 bytes`; `fits 0a875da` printed `made
+for` and `fits 0b14f8a` printed `fits`; `verify-sdk-package.py` was **1/1**,
+including *"package matches the tree"*. All four packed licence texts carry
+`Copyright (c) 2021 Ellpeck` as their first copyright line, and the launcher
+build's tag `native-0a875da-bdffb5a109ad` was verified the same way. The stale
+0.2.4 tag `native-0a875da-0fb4e08164b6` was removed before the build; the game
+log shows `Compiling naturesaura (1 of 1)`. `E2E_TMP`/`SOCK` came from
+`launcher-game.sh env`, never `/tmp` for the game root. No local `Block`/`Item`
+type or variant was introduced, so `fits` was not false-failed.
+
+| Check | Command | Result |
+|---|---|---|
+| Runtime tests | `cargo test` (re-generated after the final build) | **26 passed**, 0 failed (`sdk-test.log`) |
+| Lints / format | `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0, 0 warnings / clean |
+| Package, twice | `rm -f Cargo.lock && cargo horizon-mod build` ×2 | 62,307 B, `cmp`-identical, forwarded to `AdLf-PC` (`sdk-build.log`) |
+| Registry check | `cargo horizon-mod check naturesaura.hmod` | `naturesaura 0.2.5 …`, 62,307 B, sha `e8ac2549…3361`, exit 0 (`sdk-check.log`) |
+| Fits pin | `cargo horizon-mod fits … --build 0a875da` | **`0a875da  made for`** (`sdk-fits.log`) |
+| Fits other build | `cargo horizon-mod fits … --build 0b14f8a` | **`0b14f8a  fits`** (`sdk-fits-other.log`) |
+| Package gate | `verify-sdk-package.py naturesaura` | **1/1**, "package matches the tree", no packed `Cargo.lock` |
+| Dialect | `data_shape.py` on the tree | 7 recipe/loot files in the 26.3 dialect (`data-shape-leaf.log`) |
+| Game build | `launcher-game.sh build naturesaura --port ports/naturesaura` | `Compiling naturesaura (1 of 1)`; tag `native-0a875da-bdffb5a109ad` (`launcher-build-0.2.5.log`) |
+| In-game default | `build-slot.sh run --step e2e -- bash tools/e2e.sh` | A–I + J + K → `PASS` + **`EXIT:0`** (`e2e-launcher.log`) |
+| Control | `CONTROL=1 GAME=$CONTROL_GAME` | `Unknown or incomplete command` → `FAIL` + **`EXIT:1`** (`e2e-launcher-control.log`) |
+| Can fail | `SELFTEST=1` / `SELFTEST=effect` / `SELFTEST=effect-leaf` | conservation / grass / leaf inversions → `FAIL` + **`EXIT:1`** (three logs) |
+| Log gate | `check-e2e-logs.py naturesaura-e2e --strict` | logs=6, ok=6, missing-exit=0, bad-exit=0 |
+
+### Coverage added by this slice
+
+| Family | In 0.2.5 | Status | Proof |
+|---|---|---|---|
+| grass-die leaf branch (`GrassDieEffect.update`) | `LeavesBlock → naturesaura:decayed_leaves`, 14 vanilla ids | **tested** | phase K: drained oak leaves → decayed leaves, undrained stay oak; `SELFTEST=effect-leaf` inverts it |
+| leaf branch threshold | same `calcValues` as slice 3 | **tested** | `SELFTEST=effect-leaf` log's `/naturesaura spot`/`aura` readouts (`-2,500,000` spot, `-1,500,000` area) |
+| carried `decayed_leaves` block, item, loot table, tag | blockstate/model/texture/item/loot/`#minecraft:leaves` | **tested** | phases H (give/place/read back, unknown id refused), I (plain pickaxe 0, silk touch 1) |
+| the bush → air and nether-grass → netherrack branches, decayed leaves' random-tick decay, plant boost, ore spawn, nether decay | — | **not ported** | uncarried blocks/helpers (see the choice table and the deviations above) |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
 ## Next slice
 
-- **Family:** the leaf branch of the same `GrassDieEffect` — `LeavesBlock →
-  naturesaura:decayed_leaves` — from the gap line recorded in this slice's choice
-  table and `FINDINGS.md` §3.1's "the aura drain-spot passive effects
-  (`chunk/effect/*`: plant boost, grass death, ore spawn, nether decay …)".
-  It is the cheapest remaining family: the threshold, the once-a-second driver
-  and the target set are already in `runtime.rs`/`lib.rs`, and `decayed_leaves`
-  is a block in the kept jar that `assemble_content.py` can carry. Plant boost
-  stays blocked: the pin exposes `level_bone_meal` only on the hidden
-  `LevelsBackendMut`, with no public `ServerHost` wrapper (`world_edit.rs` has
-  none), so a mod cannot bonemeal an arbitrary position.
-- **Why it fits:** `deep` tier, no new machine/renderer/API — one more block
-  branch on the existing drained-spot effect, with its block carried in the
-  same flat `.hmod`.
-- **In-game assertion:** `ctl setblock` a `minecraft:oak_leaves` block at a
-  drained spot (`/naturesaura drain … 2500000`, radius-50 area `-1,500,000`),
-  tick 45, and `ctl block` it back as `naturesaura:decayed_leaves`; a control at
-  spot ≥ 0 under `minecraft:oak_leaves` must stay `minecraft:oak_leaves`.
-  `SELFTEST=effect-leaf` inverts the drained assertion to `EXIT:1`, and the
-  `/naturesaura spot`/`aura` readouts prove the threshold crossing.
+- **Family:** the remaining drain-spot passive effects, starting with **ore
+  spawn** (`chunk/effect/OreSpawnEffect`) if an ore block is carried, else the
+  **nether-decay** branch of `GrassDieEffect`; both come from `FINDINGS.md` §3.1's
+  "the aura drain-spot passive effects (`chunk/effect/*`: plant boost, grass
+  death, ore spawn, nether decay …)" and slice 4's coverage row `not ported`.
+  Plant boost stays excluded until the pin exposes a public "bonemeal this
+  position" helper (`level_bone_meal` is still hidden on `LevelsBackendMut`).
+- **Why it fits:** `deep` tier, same logic/machine shape — the threshold, driver
+  and target set are shared, so each new branch is one block id and its carried
+  block. Ore spawn needs an `naturesaura:*` ore carried rather than a vanilla
+  ore (which would change the mod's product); nether decay needs the nether
+  block set, also uncarried.
+- **In-game assertion:** `ctl setblock` the source block at a drained spot
+  (`/naturesaura drain … 2500000`, area `-1,500,000`), tick 45, and `ctl block`
+  back the artefact's outcome; a spot ≥ 0 must leave the source block untouched.
+  A `SELFTEST=effect-<family>` leg inverts the drained outcome to `EXIT:1`, and
+  `/naturesaura spot`/`aura` prove the threshold crossing. The concrete expected
+  ids must be read from the artefact at tag `41.10` before writing the brief —
+  do not guess them from the family name.

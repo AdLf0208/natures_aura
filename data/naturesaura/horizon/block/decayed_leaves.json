@@ -1,0 +1,10 @@
+{
+  "properties": {
+    "explosion_resistance": 0.2,
+    "hardness": 0.2,
+    "occludes": false,
+    "requires_tool": false,
+    "sounds": "minecraft:grass_block"
+  },
+  "template": "minecraft:stone"
+}

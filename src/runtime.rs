@@ -589,11 +589,38 @@ pub fn grass_die_targets(pos: [i32; 3], params: &GrassDie) -> Vec<[i32; 3]> {
     targets
 }
 
+/// The vanilla `LeavesBlock` ids at this pin, i.e. the artefact's
+/// `block instanceof LeavesBlock` target set (`GrassDieEffect.update`). Read from
+/// the prepared 26.3 resources' `assets/minecraft/blockstates/*_leaves.json`.
+/// The mod's own leaves are not carried, and decayed leaves extend `BlockImpl`,
+/// not `LeavesBlock`, so neither is a target.
+pub const LEAVES_BLOCKS: [&str; 14] = [
+    "minecraft:acacia_leaves",
+    "minecraft:azalea_leaves",
+    "minecraft:birch_leaves",
+    "minecraft:cherry_leaves",
+    "minecraft:dark_oak_leaves",
+    "minecraft:flowering_azalea_leaves",
+    "minecraft:jungle_leaves",
+    "minecraft:mangrove_leaves",
+    "minecraft:oak_leaves",
+    "minecraft:orange_poplar_leaves",
+    "minecraft:pale_oak_leaves",
+    "minecraft:red_poplar_leaves",
+    "minecraft:spruce_leaves",
+    "minecraft:yellow_poplar_leaves",
+];
+
 /// What a grass-die pass replaces a block with (`GrassDieEffect.update`).
+///
+/// The artefact checks `instanceof LeavesBlock` first, then `GrassBlock`, then
+/// `BushBlock` and its own nether grass. The port matches ids (the pin has no
+/// class/tag test in a tick), carrying the leaf and grass branches; the bush and
+/// nether-grass branches remain gaps recorded in `notes.md`.
 pub fn grass_die_replacement(block: &str) -> Option<&'static str> {
-    // Only the `GrassBlock -> COARSE_DIRT` branch is carried. The leaf branch
-    // needs the mod's own DECAYED_LEAVES block, which this slice does not ship,
-    // and the bush/nether-grass branches are separate gaps (recorded in notes).
+    if LEAVES_BLOCKS.contains(&block) {
+        return Some("naturesaura:decayed_leaves");
+    }
     (block == "minecraft:grass_block").then_some("minecraft:coarse_dirt")
 }
 
@@ -1006,11 +1033,45 @@ mod tests {
             grass_die_replacement("minecraft:grass_block"),
             Some("minecraft:coarse_dirt")
         );
-        // Only the grass branch is carried. The leaf -> decayed-leaves, bush ->
-        // air and nether-grass -> netherrack branches need blocks/behaviour this
-        // slice does not carry; they are recorded as gaps in notes.md.
-        assert_eq!(grass_die_replacement("minecraft:oak_leaves"), None);
+        // The bush -> air and nether-grass -> netherrack branches still need
+        // blocks/behaviour this port does not carry; they remain gaps in notes.md.
         assert_eq!(grass_die_replacement("naturesaura:aura_bloom"), None);
         assert_eq!(grass_die_replacement("minecraft:dirt"), None);
+    }
+
+    #[test]
+    fn grass_die_turns_leaves_into_decayed_leaves() {
+        // `LeavesBlock` in 26.3 (the artefact's target set), read from the
+        // prepared resources' blockstate ids. The list is written out here so
+        // the assertion does not borrow the implementation's own set.
+        for leaves in [
+            "minecraft:acacia_leaves",
+            "minecraft:azalea_leaves",
+            "minecraft:birch_leaves",
+            "minecraft:cherry_leaves",
+            "minecraft:dark_oak_leaves",
+            "minecraft:flowering_azalea_leaves",
+            "minecraft:jungle_leaves",
+            "minecraft:mangrove_leaves",
+            "minecraft:oak_leaves",
+            "minecraft:orange_poplar_leaves",
+            "minecraft:pale_oak_leaves",
+            "minecraft:red_poplar_leaves",
+            "minecraft:spruce_leaves",
+            "minecraft:yellow_poplar_leaves",
+        ] {
+            assert_eq!(
+                grass_die_replacement(leaves),
+                Some("naturesaura:decayed_leaves"),
+                "leaves id {leaves}"
+            );
+        }
+        // Decayed leaves extend BlockImpl, not LeavesBlock: a second pass must
+        // leave them alone.
+        assert_eq!(grass_die_replacement("naturesaura:decayed_leaves"), None);
+        assert_eq!(
+            grass_die_replacement("minecraft:grass_block"),
+            Some("minecraft:coarse_dirt")
+        );
     }
 }

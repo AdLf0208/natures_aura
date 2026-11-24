@@ -20,6 +20,9 @@
 #       into coarse dirt on the next second, while an undrained spot (>= 0)
 #       under the same grass leaves it alone. SELFTEST=effect inverts the
 #       drained patch's assertion and must FAIL.
+#  K    the same effect's leaf branch: `LeavesBlock -> naturesaura:decayed_leaves`
+#       at a drained spot, while oak leaves at a spot >= 0 stay oak leaves.
+#       SELFTEST=effect-leaf inverts the drained assertion and must FAIL.
 #
 # The game is a launcher-built client that carries the flat `.hmod` (the SDK
 # format, 2026-11-18): no `--dev-mod`, because `assets/` and `data/` travel in
@@ -90,6 +93,15 @@ GZ=40
 KX=250
 KY=200
 KZ=40
+# The leaf branch's patch: 90 blocks from the grass spot (outside its radius-50
+# area) and within the loaded chunk window around the player. Its control is
+# 100 blocks away, outside the drained spot's 20-block scatter.
+LX=240
+LY=200
+LZ=40
+MX=240
+MY=200
+MZ=-60
 # The chunk base every area read starts from, and what the bloom adds.
 DEFAULT_AURA=1000000
 BLOOM_AURA=150000
@@ -455,27 +467,29 @@ ctl wait 3
 
 echo "== H: every carried item is give-able, every block places and drops, unknown ids are refused =="
 for id in naturesaura:aura_bloom naturesaura:nature_altar naturesaura:gold_brick \
-          naturesaura:infused_stone naturesaura:infused_iron naturesaura:tainted_gold \
-          naturesaura:gold_fiber; do
+          naturesaura:infused_stone naturesaura:decayed_leaves naturesaura:infused_iron \
+          naturesaura:tainted_gold naturesaura:gold_fiber; do
     ctl command "clear @s" >/dev/null
     ctl give "$id" 1 >/dev/null || fail "give $id failed"
     ctl wait 3
     held=$(ctl inventory | jq -r --arg i "$id" '.counts[$i] // 0')
     [ "$held" -ge 1 ] || fail "$id is not in the inventory after give ($held)"
 done
-echo "  all seven carried items read back from the inventory"
-# Four blocks on the arena floor, each read back after placement.
+echo "  all eight carried items read back from the inventory"
+# Five blocks on the arena floor, each read back after placement.
 ctl command "execute in minecraft:overworld run setblock $((AX - 6)) $AY $((AZ + 8)) naturesaura:aura_bloom" >/dev/null
 ctl command "execute in minecraft:overworld run setblock $((AX - 4)) $AY $((AZ + 8)) naturesaura:infused_stone" >/dev/null
 ctl command "execute in minecraft:overworld run setblock $((AX - 2)) $AY $((AZ + 8)) naturesaura:gold_brick" >/dev/null
 ctl command "execute in minecraft:overworld run setblock $AX $AY $((AZ + 8)) naturesaura:nature_altar" >/dev/null
+ctl command "execute in minecraft:overworld run setblock $((AX + 2)) $AY $((AZ + 8)) naturesaura:decayed_leaves" >/dev/null
 ctl wait 6
 for pair in "naturesaura:aura_bloom $((AX - 6))" "naturesaura:infused_stone $((AX - 4))" \
-            "naturesaura:gold_brick $((AX - 2))" "naturesaura:nature_altar $AX"; do
+            "naturesaura:gold_brick $((AX - 2))" "naturesaura:nature_altar $AX" \
+            "naturesaura:decayed_leaves $((AX + 2))"; do
     set -- $pair
     [ "$(block_name "$2" "$AY" $((AZ + 8)))" = "$1" ] || fail "$1 did not place"
 done
-echo "  aura_bloom, infused_stone, gold_brick and nature_altar each placed and read back"
+echo "  aura_bloom, infused_stone, gold_brick, nature_altar and decayed_leaves each placed and read back"
 unknown=$(ctl command "give @s naturesaura:not_an_item 1" | jq -r '.chat[]?' | tr '\n' ' ')
 echo "  give naturesaura:not_an_item: $unknown"
 case "$unknown" in
@@ -518,9 +532,30 @@ for pair in "naturesaura:aura_bloom $((AX - 6))" "naturesaura:infused_stone $((A
     [ "$(block_name "$2" "$AY" $((AZ + 8)))" = "minecraft:air" ] \
         || fail "the broken $1 is still there"
 done
+# Decayed leaves use the jar's silk-touch-only loot table. First the differential:
+# a plain pickaxe gets no drop, so the silk-touch result below cannot be vacuous.
+ctl command "execute in minecraft:overworld run setblock $((AX + 4)) $AY $((AZ + 8)) naturesaura:decayed_leaves" >/dev/null
+ctl wait 4
+reply=$(break_block $((AX + 4)) "$AY" $((AZ + 8)))
+echo "  decayed leaves, plain pickaxe: $reply"
+got=$(jq -r '.drops["naturesaura:decayed_leaves"] // 0' <<<"$reply")
+[ "$got" -eq 0 ] || fail "decayed leaves dropped themselves without silk touch ($got): $reply"
+ctl command "item replace entity @s hotbar.0 with minecraft:iron_pickaxe[minecraft:enchantments={\"minecraft:silk_touch\":1}]" >/dev/null
+ctl wait 4
+ctl select minecraft:iron_pickaxe >/dev/null
+held=$(ctl inventory | jq -c '.held')
+grep -q "silk_touch" <<<"$held" || fail "the silk-touch pickaxe has no enchantment: $held"
+ctl command "execute in minecraft:overworld run setblock $((AX + 6)) $AY $((AZ + 8)) naturesaura:decayed_leaves" >/dev/null
+ctl wait 4
+reply=$(break_block $((AX + 6)) "$AY" $((AZ + 8)))
+echo "  decayed leaves, silk touch: $reply"
+got=$(jq -r '.drops["naturesaura:decayed_leaves"] // 0' <<<"$reply")
+[ "$got" -ge 1 ] || fail "silk touch did not drop decayed leaves: $reply"
+[ "$(block_name $((AX + 6)) "$AY" $((AZ + 8)))" = "minecraft:air" ] \
+    || fail "the silk-touch-broken decayed leaves are still there"
 ctl command "gamemode creative @s" >/dev/null
 ctl command "clear @s" >/dev/null
-echo "  all four carried loot tables dropped their block"
+echo "  all five carried loot tables dropped their block (decayed leaves only with silk touch)"
 
 echo "== J: a drained spot kills grass; an undrained spot under grass does not =="
 # Two identical grass blocks 100 blocks apart, outside each other's influence.
@@ -549,4 +584,32 @@ fi
 expect "the undrained control patch stays grass" "$(block_name "$KX" "$KY" "$KZ")" "minecraft:grass_block"
 echo "  spot $SPOT, area $AREA: the drained patch became coarse dirt while the undrained patch stayed grass"
 
-echo "PASS: a bloom stores exactly 150,000 aura once, an altar outside its multiblock and an altar in an area with no aura transmute nothing, the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura, both carried recipes craft their declared id and count in a real table with the grid emptied and the distinctive ingredient consumed while two wrong-ingredient controls craft nothing, the load log has no rejected ingredient, all seven carried items read back, all four carried blocks place and drop themselves with a vanilla stone as the drop differential, unknown ids are refused, and a drained spot turns grass into coarse dirt while an undrained spot leaves it grass"
+echo "== K: a drained spot turns leaves into decayed leaves; undrained leaves stay =="
+# `persistent=true` keeps the placed leaves from decaying on a random tick before
+# the effect's second; the branch matches the block id, not its state.
+ctl command "execute in minecraft:overworld run setblock $LX $LY $LZ minecraft:oak_leaves[persistent=true]" >/dev/null
+ctl command "execute in minecraft:overworld run setblock $MX $MY $MZ minecraft:oak_leaves[persistent=true]" >/dev/null
+ctl wait 6
+expect "the drained leaves patch was oak leaves" "$(block_name "$LX" "$LY" "$LZ")" "minecraft:oak_leaves"
+expect "the control leaves patch was oak leaves" "$(block_name "$MX" "$MY" "$MZ")" "minecraft:oak_leaves"
+spot "$LX" "$LY" "$LZ"
+expect "the leaves patch's spot before draining" "$SPOT" 0
+say "naturesaura drain $LX $LY $LZ 2500000"
+ctl wait 10
+spot "$LX" "$LY" "$LZ"
+expect "the leaves patch's spot" "$SPOT" -2500000
+aura "$LX" "$LY" "$LZ" 50
+expect "the leaves area crossed zero" "$AREA" -1500000
+# One effect second is 20 ticks; wait more than two to be independent of phase.
+ctl wait 45 >/dev/null
+spot "$LX" "$LY" "$LZ"
+expect "the leaves patch's spot after the effect" "$SPOT" -2500000
+if [ "$SELFTEST" = effect-leaf ]; then
+    expect "the drained leaves patch (selftest: must fail)" "$(block_name "$LX" "$LY" "$LZ")" "minecraft:oak_leaves"
+else
+    expect "the drained leaves patch became decayed leaves" "$(block_name "$LX" "$LY" "$LZ")" "naturesaura:decayed_leaves"
+fi
+expect "the undrained control leaves patch stays oak leaves" "$(block_name "$MX" "$MY" "$MZ")" "minecraft:oak_leaves"
+echo "  spot $SPOT, area $AREA: the drained leaves became decayed leaves while the undrained leaves stayed oak"
+
+echo "PASS: a bloom stores exactly 150,000 aura once, an altar outside its multiblock and an altar in an area with no aura transmute nothing, the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura, both carried recipes craft their declared id and count in a real table with the grid emptied and the distinctive ingredient consumed while two wrong-ingredient controls craft nothing, the load log has no rejected ingredient, all eight carried items read back, all five carried blocks place and drop themselves with a vanilla stone as the drop differential, unknown ids are refused, a drained spot turns grass into coarse dirt while an undrained spot leaves it grass, and the same spot turns vanilla leaves into naturesaura:decayed_leaves while undrained leaves stay vanilla"

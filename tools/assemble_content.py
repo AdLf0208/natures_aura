@@ -34,7 +34,7 @@ MOD = "naturesaura"
 # The pack's Modrinth SHA-1 for NaturesAura-41.10.jar (version kJ1hHmK0).
 JAR_SHA1 = "58e4f9a07e5320432d11aaa3d876337edeeeb8db"
 
-BLOCKS = ["aura_bloom", "nature_altar", "gold_brick", "infused_stone"]
+BLOCKS = ["aura_bloom", "nature_altar", "gold_brick", "infused_stone", "decayed_leaves"]
 ITEMS = ["infused_iron", "tainted_gold", "gold_fiber"]
 
 # Carried byte-for-byte from the jar: blockstates, block and item models, the
@@ -70,6 +70,12 @@ def item_definition(name: str) -> dict:
 #    waterlogged state).
 #  - `gold_brick` is `BlockImpl("gold_brick", ofFullCopy(STONE_BRICKS))`.
 #  - `infused_stone` is `BlockImpl("infused_stone", sound(STONE).strength(1.75F))`.
+#  - `decayed_leaves` is `BlockDecayedLeaves`: `Properties.of().strength(0.2F)
+#    .sound(SoundType.GRASS).noOcclusion().randomTicks()`, a plain `BlockImpl` with
+#    one state (the jar's blockstate is a single `""` variant). It is the outcome
+#    of the leaf branch of `GrassDieEffect`. The template is a single-state full
+#    cube so the jar's variant matches; `occludes: false` carries `noOcclusion`.
+#    Upstream's `randomTick` turns it to air — a later slice, not this one.
 BLOCK_DECLARATIONS = {
     "aura_bloom": {
         "template": "minecraft:poppy",
@@ -112,6 +118,16 @@ BLOCK_DECLARATIONS = {
             "requires_tool": True,
         },
     },
+    "decayed_leaves": {
+        "template": "minecraft:stone",
+        "properties": {
+            "hardness": 0.2,
+            "explosion_resistance": 0.2,
+            "sounds": "minecraft:grass_block",
+            "occludes": False,
+            "requires_tool": False,
+        },
+    },
 }
 
 # The three plain materials (`ModItems`: `new ItemBase("infused_iron")` …).
@@ -126,9 +142,12 @@ TAB = {
 }
 
 # The jar's own tag files, filtered to the slice's blocks: pickaxe mineable
-# (the altar, gold brick and infused stone) and small flowers (the bloom).
+# (the altar, gold brick and infused stone), small flowers (the bloom), and the
+# vanilla `leaves` tag (decayed leaves; the jar's golden/ancient leaves are not
+# carried, so a dangling value is not written).
 MINEABLE_PICKAXE = {"values": [f"{MOD}:nature_altar", f"{MOD}:gold_brick", f"{MOD}:infused_stone"]}
 SMALL_FLOWERS = {"values": [f"{MOD}:aura_bloom"]}
+LEAVES_TAG = {"values": [f"{MOD}:decayed_leaves"]}
 
 # The `gold_fiber` recipe names `c:nuggets/gold`, which the prepared 26.3 root
 # does not ship; an unknown tag is an empty ingredient, so it is written.
@@ -207,6 +226,7 @@ def main() -> None:
     write(f"data/{MOD}/horizon/creative_tab/natures_aura.json", TAB)
     write("data/minecraft/tags/block/mineable/pickaxe.json", MINEABLE_PICKAXE)
     write("data/minecraft/tags/block/small_flowers.json", SMALL_FLOWERS)
+    write("data/minecraft/tags/block/leaves.json", LEAVES_TAG)
     for relative, data in CONVENTION_TAGS.items():
         write(relative, data)
 

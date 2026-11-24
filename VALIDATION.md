@@ -337,3 +337,79 @@ naturesaura 0.2.4 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa2
   missing-exit=0, bad-exit=0.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
+## 9. Slice 4 (0.2.5, 2026-11-24): the leaf branch of `GrassDieEffect`
+
+Pin `0a875da…` / mixins `e59da90…` unchanged. Every Rust step ran in a
+`build-slot.sh` lease **forwarded to `AdLf-PC`** (no `BUILD_LOCAL=1`); the game
+legs stayed local through `launcher-game.sh build` + a leased `--step e2e`.
+
+**Red first** (`ports/_shared/evidence/naturesaura/effect-leaf-red.log`, slot
+exit 101). With `grass_die_replacement` still grass-only, the new test failed:
+
+```
+test runtime::tests::grass_die_turns_leaves_into_decayed_leaves ... FAILED
+thread 'runtime::tests::grass_die_turns_leaves_into_decayed_leaves' (950304) panicked at src/runtime.rs:1036:13:
+assertion `left == right` failed: leaves id minecraft:acacia_leaves
+  left: None
+ right: Some("naturesaura:decayed_leaves")
+test result: FAILED. 25 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+The artefact's branch was read first at tag `41.10` (`70b93d3…`):
+`GrassDieEffect.update` maps `block instanceof LeavesBlock` to
+`ModBlocks.DECAYED_LEAVES.defaultBlockState()`, and `BlockDecayedLeaves` is a
+single-state `BlockImpl` with strength 0.2, grass sound and no occlusion. The
+port matches the 14 vanilla leaves ids measured from the prepared 26.3
+blockstates (no class/tag test in a tick), and carries the block and its
+silk-touch loot table from the kept jar. Upstream's random-tick decay to air is
+not ported (recorded in `notes.md`).
+
+```
+cargo test                                          -> 26 passed; 0 failed
+cargo clippy --all-targets -- -D warnings            -> exit 0, 0 warnings
+cargo fmt --check                                    -> clean
+rm -f Cargo.lock && cargo horizon-mod build          # twice, cmp-identical, forwarded
+cargo horizon-mod check naturesaura.hmod             -> 0.2.5, exit 0
+cargo horizon-mod fits … --build 0a875da             -> 0a875da  made for
+cargo horizon-mod fits … --build 0b14f8a             -> 0b14f8a  fits
+python3 ports/tools/verify-sdk-package.py naturesaura -> 1/1
+```
+
+```
+naturesaura 0.2.5 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa229af51a/e59da9094f0c2fdda6c627fe9eff22dec6a906f0, for 26.3)
+  62307 bytes, SHA-256 e8ac2549a9583b4750e7307ce6a1df93b73c11d1685415dd84f86bdfc2c13361, unsigned
+```
+
+- **70 entries**, no packed `Cargo.lock`; `LICENSE`, `LICENSE-NOTICE.md` and both
+  content copies carry `Copyright (c) 2021 Ellpeck` as their first copyright
+  line. `verify-sdk-package.py` confirms every packed file is the tree's bytes.
+- **Manifest bump proven:** the warmed slot logged `Compiling naturesaura v0.2.5`
+  and the launcher build logged `Compiling naturesaura (1 of 1)`. The stale
+  0.2.4 tag `native-0a875da-0fb4e08164b6` was removed; the new tag is
+  `native-0a875da-bdffb5a109ad`. `E2E_TMP`/`SOCK` came from `launcher-game.sh
+  env`, never `/tmp` for the game root. No local `Block`/`Item` type or variant
+  introduced, so `fits` could not false-fail.
+- **In-game:** default `PASS` + `EXIT:0`; control (`CONTROL=1 GAME=$CONTROL_GAME`)
+  `FAIL` + `EXIT:1`; `SELFTEST=1`, `SELFTEST=effect` and the new
+  `SELFTEST=effect-leaf` each `FAIL` + `EXIT:1`. Phase K's transcript:
+
+```
+== K: a drained spot turns leaves into decayed leaves; undrained leaves stay ==
+  Aura spot at 240, 200, 40: 0
+  Aura spot at 240, 200, 40: -2500000
+  Nature's Aura at 240, 200, 40 (radius 50): area=-1500000 base=1000000 spots=-2500000 count=1
+  Aura spot at 240, 200, 40: -2500000
+  spot -2500000, area -1500000: the drained leaves became decayed leaves while the undrained leaves stayed oak
+```
+
+  The inverted leg fails with `FAIL: the drained leaves patch (selftest: must
+  fail) is naturesaura:decayed_leaves, expected minecraft:oak_leaves`. Phase I's
+  new differential (plain pickaxe drops nothing, silk touch drops one decayed
+  leaves block) proves the carried loot table works. Slice 1's aura/bloom/altar,
+  slice 2's recipes/items/blocks/loot and slice 3's grass death stayed green;
+  H/I were extended from four to five blocks and seven to eight items.
+- **Log gate:** `check-e2e-logs.py naturesaura-e2e --strict` → logs=6, ok=6,
+  missing-exit=0, bad-exit=0.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
