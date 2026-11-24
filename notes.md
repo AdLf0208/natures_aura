@@ -523,3 +523,72 @@ Ladder: `cargo test` 21 passed; `cargo clippy --all-targets -- -D warnings` exit
 exit 0. In-game: `launcher-game.sh run naturesaura` → `PASS` + `EXIT:0`
 (`ports/_shared/evidence/naturesaura-e2e/e2e-launcher.log`); `GAME=$CONTROL_GAME` →
 `FAIL` (`naturesaura aura … Unknown or incomplete command`) + `EXIT:1`.
+
+## Reviewer follow-up on #1530 (2026-11-24) — version 0.2.3
+
+**The reviewer's item, verbatim:** "`LICENSE` omits 2021 from Ellpeck's upstream copyright line and attributes the port to other contributors. Please keep upstream's exact copyright line and correct the port attribution."
+
+The merged PR carried **0.2.2**, so the fix is a **new version**; the published record is not
+rewritten. The publisher appends 0.2.3 to the retained PR branch (orchestrator's step).
+
+**Exact upstream line, verified from the artefact** — `Ellpeck/NaturesAura`'s `LICENSE` at
+tag `41.10` = commit `70b93d37037f3559312834f0f42e824431090b64` (the commit recorded in this
+file's header), fetched from the upstream raw file at that commit and read back:
+
+```
+Copyright (c) 2021 Ellpeck
+```
+
+**What changed (all packed bytes, so a product change with no new behaviour family):**
+- `LICENSE` line 3 is now that exact upstream line; line 4 is the port's own credit
+  `Copyright (c) 2026 AdLf0208 (Horizon port)`, following the industrialforegoing 0.2.13
+  precedent (upstream line 3, port line 4). The refused `Copyright (c) Ellpeck` /
+  `Copyright (c) 2026 Horizon Veinminer contributors` first credit line is gone.
+- `LICENSE-NOTICE.md` quotes the same verbatim line, with the port attribution in a separate
+  block below it; the stale `Copyright of the original: Copyright (c) Ellpeck.` bullet is gone.
+- `tools/stamp_license.py` re-ran, so the two packed copies under `data/naturesaura/license/`
+  carry the corrected texts.
+- `horizon-mod.toml` and `Cargo.toml`: `0.2.2` → `0.2.3`. `src/runtime.rs` and every game
+  behaviour are untouched (`0a11dfcc…`, still 21 tests).
+
+**Delivered 0.2.3:** 55,145 B, sha256
+`4687233c2c7d2af296a0cfd775300262421ff2a2e9165d6526af43de81529c7f`, 62 entries, no packed
+`Cargo.lock`; `LICENSE`, `LICENSE-NOTICE.md` and both content copies are the corrected bytes.
+
+| Check | Command | Result |
+|---|---|---|
+| Package, twice | `build-slot.sh run --step build -- bash -c 'rm -f Cargo.lock && cargo horizon-mod build && …'` ×2 | 55,145 B, `cmp`-identical, forwarded to `AdLf-PC` (`sdk-build.log`) |
+| Registry check | `cargo horizon-mod check naturesaura.hmod` | `naturesaura 0.2.3 (native-mod, format native-1/0a875da…/e59da90…, for 26.3)`, 55,145 B, sha256 `4687233c…29c7f`, exit 0 (`sdk-check.log`) |
+| Fits pin | `cargo horizon-mod fits naturesaura.hmod --build 0a875da` | **`0a875da  made for`** (`sdk-fits.log`) |
+| Fits other build | `cargo horizon-mod fits naturesaura.hmod --build 0b14f8a` | **`0b14f8a  fits`** (`sdk-fits-other.log`) |
+| Runtime tests (after the build) | `cargo test` | **21 passed**, 0 failed (`sdk-test.log`) |
+| Lints / format | `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0, 0 warnings / clean |
+| Package gate | `verify-sdk-package.py naturesaura` | **1/1**, including `ok package matches the tree — every packed file is the tree's bytes` |
+| Game build | `launcher-game.sh build naturesaura --port ports/naturesaura` | native tag `native-0a875da-9a0ab846863a`, exported game carries version 0.2.3 and the corrected `LICENSE` (`launcher-build-0.2.3.log`) |
+| In-game default | `build-slot.sh run --step e2e -- bash tools/e2e.sh` | slice-1 A–F, recipes G, items/blocks H, loot I all green → `PASS` + **`EXIT:0`** (`e2e-launcher.log`) |
+| Control | `CONTROL=1 GAME=$CONTROL_GAME` | unknown command/block, `FAIL` + **`EXIT:1`** (`e2e-launcher-control.log`) |
+| Can fail | `SELFTEST=1` | `FAIL: area + container (selftest, must fail) is 1134960, expected 1134961` + **`EXIT:1`** (`e2e-selftest.log`) |
+| Log gate | `check-e2e-logs.py naturesaura-e2e --strict` | logs=4, ok=4, missing-exit=0, bad-exit=0 |
+
+No stale `native-*` tag carrying naturesaura was found before the game build (defensive scan of
+the launcher's versions dir found none to remove). `E2E_TMP`/`SOCK` came from
+`launcher-game.sh env`, never `/tmp` for the game root. No `Block`/`Item` local type or variant
+was introduced, so `fits` was not false-failed.
+
+Skills: superpowers/using-superpowers,writing-plans,verification-before-completion; BeautifulRust/rust-best-practices
+
+## Next slice
+
+- **Family:** the aura drain-spot passive effects (`chunk/effect/*`: plant boost, grass death,
+  ore spawn, nether decay), from `FINDINGS.md` §3.1's exact line "The aura drain-spot passive
+  effects (`chunk/effect/*`: plant boost, grass death, ore spawn, nether decay …): they change
+  the world each second at every drained spot and are a slice of their own."
+- **Why it fits:** `deep` tier, and it shapes the already-ported chunk-aura store (the spot
+  amount the bloom and `/naturesaura spot` already expose) rather than adding a new API, machine
+  or renderer — the same logic-shape as slice 1.
+- **In-game assertion:** with `ctl setblock`/`ctl block`, create a drained spot at a known
+  negative amount under a sapling/grass patch; tick and read the block id back with `ctl block`,
+  asserting the effect's outcome (plant advances / grass becomes dirt), while a control spot at
+  ≥ 0 under the same blocks shows no change — the differential that would fail if the effect
+  fired unconditionally. Read the spot with `/naturesaura spot` before and after to prove the
+  amount crossed the effect's threshold.

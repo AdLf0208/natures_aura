@@ -1,11 +1,11 @@
-# Package receipt — naturesaura 0.2.2
+# Package receipt — naturesaura 0.2.3
 
 | field | value |
 |---|---|
-| version | `0.2.2` |
+| version | `0.2.3` |
 | file | `naturesaura.hmod` |
-| bytes | 54,908 |
-| sha256 | `be31234c0485c8873071b0a4ff2f1568dc23bbc3a35a96a1140fe61d8d978143` |
+| bytes | 55,145 |
+| sha256 | `4687233c2c7d2af296a0cfd775300262421ff2a2e9165d6526af43de81529c7f` |
 | source | this tag — the tree here is the source that produced the archive |
 | game | 26.3 |
 | horizon | `0a875da91dbb0fdcb7ba8c42c11341aa229af51a` |

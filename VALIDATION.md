@@ -211,3 +211,46 @@ naturesaura 0.2.2 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa2
   (`evidence/naturesaura/data-shape-green.log`).
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
+
+## 7. Reviewer follow-up #1530 (0.2.3, 2026-11-24): copyright line + attribution
+
+The reviewer refused the first credit line: upstream's `LICENSE` at tag `41.10` (commit
+`70b93d3…`) reads, verbatim, `Copyright (c) 2021 Ellpeck`. That exact line is now `LICENSE`
+line 3, with `Copyright (c) 2026 AdLf0208 (Horizon port)` on line 4 (industrialforegoing 0.2.13
+precedent); `LICENSE-NOTICE.md` quotes the same line and puts the port credit in a separate
+block below. `stamp_license.py` regenerated the two packed copies. The published 0.2.2 record
+is untouched — the fix is a new patch version.
+
+Pin `0a875da…` / mixins `e59da90…` unchanged; `src/runtime.rs` unchanged (`0a11dfcc…`).
+Every compile step ran in a `build-slot.sh` lease **forwarded to AdLf-PC** (no `BUILD_LOCAL=1`);
+the in-game legs ran locally through `launcher-game.sh` + a leased `--step e2e`.
+
+```
+rm -f Cargo.lock && cargo horizon-mod build     # twice, cmp-identical, forwarded
+cargo horizon-mod check naturesaura.hmod        # 0.2.3, exit 0
+cargo horizon-mod fits … --build 0a875da        # 0a875da  made for
+cargo horizon-mod fits … --build 0b14f8a        # 0b14f8a  fits
+cargo test                                      # 21 passed; 0 failed (after the build)
+cargo clippy --all-targets -- -D warnings         # exit 0, 0 warnings
+cargo fmt --check                                # clean
+python3 ports/tools/verify-sdk-package.py naturesaura  # 1/1, "package matches the tree"
+python3 ports/tools/check-e2e-logs.py naturesaura-e2e --strict  # logs=4 ok=4
+```
+
+```
+naturesaura 0.2.3 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa229af51a/e59da9094f0c2fdda6c627fe9eff22dec6a906f0, for 26.3)
+  55145 bytes, SHA-256 4687233c2c7d2af296a0cfd775300262421ff2a2e9165d6526af43de81529c7f, unsigned
+```
+
+- **62 entries**, no packed `Cargo.lock`; both licence texts and both content copies are the
+  corrected bytes, and `verify-sdk-package.py` confirms the whole archive matches the tree.
+- **Fits:** `0a875da made for`, `0b14f8a fits` — no local `Block`/`Item` type or variant
+  introduced, so no false failure from that trap.
+- **In-game:** the launcher's new native tag `native-0a875da-9a0ab846863a` was exported and its
+  `LICENSE` and manifest verified before the legs. Default `PASS` + `EXIT:0`; control and
+  `SELFTEST=1` both `FAIL` + `EXIT:1` on the expected assertions; strict log gate 4/4. All of
+  slice 1's aura/bloom/altar/recipes/items/blocks/loot assertions stayed green.
+- **Traps observed:** no stale `native-*` tag carrying naturesaura was found; game root used
+  `E2E_TMP`/`SOCK` from `launcher-game.sh env`, not `/tmp`.
+
+Skills: superpowers/using-superpowers,writing-plans,verification-before-completion; BeautifulRust/rust-best-practices

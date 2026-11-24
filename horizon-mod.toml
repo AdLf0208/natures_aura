@@ -13,7 +13,7 @@
 # until the maintainer approves publishing (ARCHITECTURE.md §8).
 id = "naturesaura"
 name = "Nature's Aura"
-version = "0.2.2"
+version = "0.2.3"
 description = """A port of Nature's Aura for Horizon: the chunk aura store (1,000,000 at the base plus
 its drain spots), the aura bloom that fills 150,000 aura once when it appears, and the nature's
 altar — its 9x4x9 multiblock, its 500,000-aura container, 300 aura a tick pulled from the area it
