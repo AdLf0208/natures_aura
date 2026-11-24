@@ -254,3 +254,86 @@ naturesaura 0.2.3 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa2
   `E2E_TMP`/`SOCK` from `launcher-game.sh env`, not `/tmp`.
 
 Skills: superpowers/using-superpowers,writing-plans,verification-before-completion; BeautifulRust/rust-best-practices
+
+## 8. Slice 3 (0.2.4, 2026-11-24): the grass-death drain-spot effect
+
+Pin `0a875da…` / mixins `e59da90…` unchanged. Every Rust step ran in a
+`build-slot.sh` lease **forwarded to `AdLf-PC`** (no `BUILD_LOCAL=1`); the game
+legs stay local through `launcher-game.sh build` + a leased `--step e2e`.
+
+**Red first** (`ports/_shared/evidence/naturesaura/effect-red.log`): with the
+rule stubbed to `None`, three new tests failed. Verbatim:
+
+```
+---- runtime::tests::grass_die_fires_only_at_a_debt_whose_area_is_negative stdout ----
+thread 'runtime::tests::grass_die_fires_only_at_a_debt_whose_area_is_negative' (863269) panicked at src/runtime.rs:893:9:
+assertion `left == right` failed
+  left: None
+ right: Some(GrassDie { amount: 15, dist: 20 })
+
+test result: FAILED. 21 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Then the rule, the deterministic targets and the glue were written:
+
+```
+cargo test                                          -> 25 passed; 0 failed
+cargo clippy --all-targets -- -D warnings            -> exit 0, 0 warnings
+cargo fmt --check                                    -> clean (applied, re-checked)
+```
+
+Clippy first refused two things, both fixed rather than silenced: a manual
+`tick % 20 == 0` (now `tick.is_multiple_of(EFFECT_TICKS)`) and a `(z - 0).abs()`
+identity in a test. No `Block`/`Item` local type or variant was introduced, so
+`fits` cannot false-fail on R9. The exact upstream copyright line
+`Copyright (c) 2021 Ellpeck` was verified first in `LICENSE`,
+`LICENSE-NOTICE.md` and both packed content copies, and is unchanged.
+
+Final build and gates (`sdk-*.log` regenerated for 0.2.4):
+
+```
+rm -f Cargo.lock && cargo horizon-mod build     # twice, cmp-identical; forwarded
+cargo horizon-mod check naturesaura.hmod        # 0.2.4, exit 0
+cargo horizon-mod fits … --build 0a875da        # 0a875da  made for
+cargo horizon-mod fits … --build 0b14f8a        # 0b14f8a  fits
+python3 ports/tools/verify-sdk-package.py naturesaura  # 1/1, "package matches the tree"
+cargo test                                      # 25 passed, 0 failed (AFTER the final build)
+cargo clippy --all-targets -- -D warnings        # exit 0, 0 warnings
+cargo fmt --check                                # clean
+```
+
+```
+naturesaura 0.2.4 (native-mod, format native-1/0a875da91dbb0fdcb7ba8c42c11341aa229af51a/e59da9094f0c2fdda6c627fe9eff22dec6a906f0, for 26.3)
+  59131 bytes, SHA-256 4e70a92adf6932e72f0de90393dd9fedd2019b663fa4d0e91140090c7522b5c9, unsigned
+```
+
+- **62 entries**, no packed `Cargo.lock`; `LICENSE`, `LICENSE-NOTICE.md` and both
+  content copies carry the exact upstream line first. `verify-sdk-package.py`
+  confirms every packed file is the tree's bytes.
+- **Manifest bump proven:** the warmed slot logged `Compiling naturesaura v0.2.4`
+  and the launcher build logged `Compiling naturesaura (1 of 1)`.
+- **Fits:** `0a875da made for`, `0b14f8a fits`. No local `Block`/`Item` type or
+  variant introduced, so no false failure from that trap.
+- **Stale tag:** the old `native-0a875da-9a0ab846863a` carried 0.2.3; it was
+  removed before the build. The new tag is `native-0a875da-0fb4e08164b6`,
+  exported under `E2E_TMP` (never `/tmp` for the game root).
+- **In-game:** default `PASS` + `EXIT:0`, control `FAIL` + `EXIT:1`, `SELFTEST=1`
+  `FAIL` + `EXIT:1`, `SELFTEST=effect` `FAIL` + `EXIT:1`. Phase J's transcript:
+
+```
+== J: a drained spot kills grass; an undrained spot under grass does not ==
+  Aura spot at 150, 200, 40: 0
+  Aura spot at 150, 200, 40: -2500000
+  Nature's Aura at 150, 200, 40 (radius 50): area=-1500000 base=1000000 spots=-2500000 count=1
+  Aura spot at 150, 200, 40: -2500000
+  spot -2500000, area -1500000: the drained patch became coarse dirt while the undrained patch stayed grass
+```
+
+  The inverted leg fails with
+  `FAIL: the drained patch (selftest: must fail) is minecraft:coarse_dirt, expected minecraft:grass_block`.
+  All of slice 1's aura/bloom/altar, slice 2's recipes/items/blocks/loot, and the
+  three existing control/selftest legs stayed green.
+- **Log gate:** `check-e2e-logs.py naturesaura-e2e --strict` → logs=5, ok=5,
+  missing-exit=0, bad-exit=0.
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port

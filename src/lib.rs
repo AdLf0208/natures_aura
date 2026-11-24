@@ -20,6 +20,7 @@ pub mod runtime;
 
 use std::array;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mod_api::{
     self, AttachmentCodec, AttachmentError, AttachmentType, BlockClick, BlockEntityEvent,
@@ -27,13 +28,14 @@ use mod_api::{
     BlockUpdateFlags, Command, CommandArgumentValue, CommandSource, Compound, Flow, Hooks, Host,
     HostTransaction, InteractionResult, ItemKey, ItemPlace, ItemResource, ItemStack, LevelRef,
     LevelSide, ModBlockEntityView, ModContainer, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ServerHost, Tag, Text, UseItemOnEvent,
-    UseWithoutItemEvent,
+    RegistrationContext, RunModCommandEvent, ServerHost, ServerTickEvent, ServerTickPhase, Tag,
+    Text, UseItemOnEvent, UseWithoutItemEvent,
 };
 use runtime::{
     ALTAR_CHECK_TICKS, ALTAR_MAX_AURA, ALTAR_RADIUS, ALTAR_RECIPES, Altar, AltarPart,
-    BLOOM_GENERATED_AURA, ChunkAura, DEFAULT_AURA, GENERATE_RADIUS, LEVEL_ADMINS, altar_complete,
-    altar_parts, altar_recipe, may_inspect, recipe_at, transfer_is_complete,
+    BLOOM_GENERATED_AURA, ChunkAura, DEFAULT_AURA, GENERATE_RADIUS, GRASS_DIE_RADIUS, LEVEL_ADMINS,
+    altar_complete, altar_parts, altar_recipe, grass_die, grass_die_replacement, grass_die_targets,
+    may_inspect, recipe_at, transfer_is_complete,
 };
 
 /// The aura bloom (`BlockAuraBloom("aura_bloom", …)`).
@@ -522,14 +524,111 @@ fn altar_click(
 }
 
 // ---------------------------------------------------------------------------
+// The drained-spot passive effect: grass death (`AuraChunk.update`)
+// ---------------------------------------------------------------------------
+
+/// `AuraChunk.update()` runs once a second at 20 tps.
+const EFFECT_TICKS: u64 = 20;
+
+/// How far around an online player the port looks for loaded chunks with spots.
+/// Upstream walks `LevelData.auraChunksWithSpots` (every loaded chunk that holds
+/// a spot); the public SDK exposes loaded chunks via `Host::chunk`, so the port
+/// scans the chunk window a player keeps loaded. Eight chunks is 128 blocks,
+/// wider than the effect's own 75-block scatter and 50-block area radius.
+const EFFECT_CHUNKS: i32 = 8;
+
+/// One passing second: apply the grass-die effect at every drained spot the port
+/// can see. Upstream walks `LevelData.auraChunksWithSpots` and calls each
+/// effect's `update` per spot; here the spots live in chunk attachments and a
+/// loaded chunk is one a player keeps in memory.
+fn grass_die_second(host: &mut dyn ServerHost) {
+    let players = host.players().server_players();
+    for level in host.levels().list_levels() {
+        // `GrassDieEffect.appliesHere`: overworld or nether only.
+        if host.level("minecraft:overworld") != Some(level)
+            && host.level("minecraft:nether") != Some(level)
+        {
+            continue;
+        }
+        let centers = players
+            .iter()
+            .filter(|player| player.level(host) == Some(level))
+            .filter_map(|player| player.entity().position(host))
+            .map(|at| [at[0] as i32 >> 4, at[2] as i32 >> 4])
+            .collect::<Vec<_>>();
+        for [px, pz] in centers {
+            for cx in (px - EFFECT_CHUNKS)..=(px + EFFECT_CHUNKS) {
+                for cz in (pz - EFFECT_CHUNKS)..=(pz + EFFECT_CHUNKS) {
+                    let chunk = [cx, cz];
+                    if host.chunk(level, chunk).is_none() {
+                        continue;
+                    }
+                    let Some(store) = store_of(host, chunk) else {
+                        continue;
+                    };
+                    for (pos, amount) in store.spots().collect::<Vec<_>>() {
+                        grass_die_at(host, level, pos, amount);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One spot's grass-die pass. The threshold, the target choice and the block
+/// mapping live in [`runtime`]; this function only reads and writes blocks.
+fn grass_die_at(host: &mut dyn ServerHost, level: LevelRef, pos: [i32; 3], amount: i32) {
+    let (sum, count) = area_spots(host, pos, GRASS_DIE_RADIUS);
+    let area = DEFAULT_AURA.saturating_add(sum);
+    let Some(params) = grass_die(amount, area, count as i32) else {
+        return;
+    };
+    for target in grass_die_targets(pos, &params) {
+        let Some(id) = block_id(host, level, target) else {
+            continue;
+        };
+        let Some(replacement) = grass_die_replacement(&id) else {
+            continue;
+        };
+        let Some(state) = host.block_state_id(replacement) else {
+            continue;
+        };
+        let _ = level.set_block(
+            host,
+            target,
+            state,
+            BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The one impl Hooks
 // ---------------------------------------------------------------------------
 
 #[derive(Default)]
-struct Mod;
+struct Mod {
+    /// Running count of authoritative ticks, advanced once per running tick.
+    tick: AtomicU64,
+}
 
 #[mod_api::horizon_mod]
 impl Hooks for Mod {
+    /// `AuraChunk.update()`: once a running second, apply the drained spots' passive
+    /// effect. A frozen step does not advance the world and does nothing.
+    fn server_tick(&self, host: &mut dyn ServerHost, event: &mut ServerTickEvent<'_>) {
+        let ServerTickPhase::ServerTickStart {
+            world_running: true,
+        } = event.phase
+        else {
+            return;
+        };
+        let tick = self.tick.fetch_add(1, Ordering::Relaxed) + 1;
+        if tick.is_multiple_of(EFFECT_TICKS) {
+            grass_die_second(host);
+        }
+    }
+
     /// Declare the two block entity types (each held by its own block), their Parts, the
     /// altar's one item slot, the click Part and the recipe outputs.
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {

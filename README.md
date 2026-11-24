@@ -1,9 +1,10 @@
-# Nature's Aura for Horizon — slice 1
+# Nature's Aura for Horizon — slices 1–3
 
 A native Horizon port of [Nature's Aura](https://github.com/Ellpeck/NaturesAura)
-41.10 (MIT) by Ellpeck. **Slice 1 implements one complete aura/ritual loop and
-nothing else.** Since 2026-11-18 it is one **flat SDK package** (`naturesaura.hmod`,
-`api = "0.2"`), which carries the code, `assets/` and `data/` together.
+41.10 (MIT) by Ellpeck. It implements one complete aura/ritual loop, the carried
+recipes and materials, and the grass-death drain-spot effect. Since 2026-11-18 it
+is one **flat SDK package** (`naturesaura.hmod`, `api = "0.2"`), which carries the
+code, `assets/` and `data/` together.
 
 ## What works
 
@@ -23,11 +24,15 @@ nothing else.** Since 2026-11-18 it is one **flat SDK package** (`naturesaura.hm
 - **Materials**: the gold bricks the multiblock needs are craftable in-game
   (`gold nuggets + short grass + leaves -> gold_fiber`, then
   `stone_bricks + gold_fiber -> gold_brick`).
+- **Grass death** (`GrassDieEffect`): once a running second, a spot whose amount
+  is negative *and* whose radius-50 area aura is below zero turns grass into
+  coarse dirt; a spot at zero or above leaves the grass alone.
 
 ## What does not work yet (by design — see `FINDINGS.md` §3.1)
 
-The mod's other 74 blocks and 142 items, the aura drain-spot passive effects, the
-aura containers for items (`aura_bottle`, `aura_cache`), the RF converter, the
+The mod's other 74 blocks and 142 items, the other drain-spot effects (plant
+boost, ore spawn, nether decay and the leaf/bush/nether-grass branches of grass
+death), the aura containers for items (`aura_bottle`, `aura_cache`), the RF converter, the
 other aura generators, the tree ritual, the offering table, the altars of
 birthing, worldgen for the bloom, and the guide book. The altar's 31 catalyst
 recipes need the catalyst blocks, which are a later slice; the altar has no
@@ -63,7 +68,7 @@ upstream's `canExtract` refuses an input too).
 ## Building
 
 ```
-cargo test                                        # the pure rules, 19 tests
+cargo test                                        # the pure rules, 25 tests
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 rm -f Cargo.lock                                  # see notes.md, migration trap 5

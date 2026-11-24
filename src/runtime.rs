@@ -514,6 +514,89 @@ pub fn transfer_is_complete(count: u32, inserted: u32) -> bool {
     count > 0 && count == inserted
 }
 
+// ---------------------------------------------------------------------------
+// Drain-spot passive effect: grass death (`GrassDieEffect`)
+// ---------------------------------------------------------------------------
+
+/// The radius the drain-spot effect measures the area over
+/// (`getAuraAndSpotAmountInArea(level, pos, 50)`).
+pub const GRASS_DIE_RADIUS: i32 = 50;
+
+/// What one grass-die pass derives from a spot (`GrassDieEffect.calcValues`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GrassDie {
+    /// How many blocks the pass tries to change (`amount`).
+    pub amount: i32,
+    /// The scatter radius, clamped to 5..=75 (`dist`).
+    pub dist: i32,
+}
+
+/// Whether a drained spot's grass-die effect fires, and with what reach.
+///
+/// Upstream fires only at a *negative* spot whose radius-50 area aura
+/// (`1_000_000 + the spot sum`) is also negative, and only when the debt is
+/// concentrated enough to make `amount > 1`.
+pub fn grass_die(spot: i32, area_aura: i32, spot_count: i32) -> Option<GrassDie> {
+    if spot >= 0 || spot_count <= 0 || area_aura >= 0 {
+        return None;
+    }
+    let magnitude = i64::from(area_aura.unsigned_abs());
+    // `Mth.ceil(abs(aura) / 100000F / spotCount)` — one division, so the rounding
+    // is on the whole quotient, not on `abs(aura) / 100000` first.
+    let denominator = 100_000_i64 * i64::from(spot_count);
+    let amount = ((magnitude + denominator - 1) / denominator).min(300);
+    if amount <= 1 {
+        return None;
+    }
+    // `Mth.clamp(abs(aura) / 75000, 5, 75)` — Java's integer division.
+    let dist = (magnitude / 75_000).clamp(5, 75);
+    Some(GrassDie {
+        amount: amount as i32,
+        dist: dist as i32,
+    })
+}
+
+/// The next value of the port's small deterministic generator. Upstream samples
+/// `level.random`; the port owns its sequence so a drained spot's scatter is
+/// reproducible from the spot alone (recorded as a deviation in `notes.md`).
+fn next_offset(seed: &mut u64) -> u64 {
+    *seed = seed
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(1_442_695_040_888_963_407);
+    *seed >> 33
+}
+
+/// Where one grass-die pass looks for grass: the spot itself first, then
+/// `amount - 1` positions scattered within `dist` (halved on Y, as upstream's
+/// `dist / 2` does). Starting at the spot is a deliberate deviation: upstream's
+/// pure gaussian scatter can miss the very spot that drives the effect, which
+/// makes it unobservable in a small scenario.
+#[must_use]
+pub fn grass_die_targets(pos: [i32; 3], params: &GrassDie) -> Vec<[i32; 3]> {
+    let mut targets = Vec::with_capacity(params.amount.max(1) as usize);
+    targets.push(pos);
+    let mut seed = (pos[0] as u64 & 0xffff_ffff)
+        ^ ((pos[1] as u64 & 0xffff) << 32)
+        ^ ((pos[2] as u64 & 0xffff) << 48)
+        ^ 0x9e37_79b9_7f4a_7c15;
+    let (span, yspan) = (params.dist.max(1), (params.dist / 2).max(1));
+    for _ in 1..params.amount.max(1) {
+        let x = pos[0] + (next_offset(&mut seed) % (2 * span as u64 + 1)) as i32 - span;
+        let y = pos[1] + (next_offset(&mut seed) % (2 * yspan as u64 + 1)) as i32 - yspan;
+        let z = pos[2] + (next_offset(&mut seed) % (2 * span as u64 + 1)) as i32 - span;
+        targets.push([x, y, z]);
+    }
+    targets
+}
+
+/// What a grass-die pass replaces a block with (`GrassDieEffect.update`).
+pub fn grass_die_replacement(block: &str) -> Option<&'static str> {
+    // Only the `GrassBlock -> COARSE_DIRT` branch is carried. The leaf branch
+    // needs the mod's own DECAYED_LEAVES block, which this slice does not ship,
+    // and the bush/nether-grass branches are separate gaps (recorded in notes).
+    (block == "minecraft:grass_block").then_some("minecraft:coarse_dirt")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,5 +935,82 @@ mod tests {
         assert!(!transfer_is_complete(3, 0), "an incompatible hand");
         assert!(!transfer_is_complete(3, 2), "a partial insert");
         assert!(!transfer_is_complete(0, 0), "nothing to take");
+    }
+
+    #[test]
+    fn grass_die_fires_only_at_a_debt_whose_area_is_negative() {
+        // One spot of -2,500,000: the area is 1,000,000 - 2,500,000 = -1,500,000.
+        // amount = ceil(1,500,000 / 100000 / 1) = 15; dist = clamp(1,500,000 /
+        // 75,000 = 20, 5, 75) = 20.
+        assert_eq!(
+            grass_die(-2_500_000, -1_500_000, 1),
+            Some(GrassDie {
+                amount: 15,
+                dist: 20
+            })
+        );
+        // A positive spot never kills grass, even with a negative area (the
+        // area's debt belongs to some other spot).
+        assert_eq!(grass_die(1, -1_500_000, 1), None);
+        // A negative spot in a still-positive area is inert.
+        assert_eq!(grass_die(-100, DEFAULT_AURA - 100, 1), None);
+        // A zero spot is no spot at all.
+        assert_eq!(grass_die(0, DEFAULT_AURA, 0), None);
+    }
+
+    #[test]
+    fn grass_die_concentrates_the_debt_over_the_spot_count() {
+        // The same -1,500,000 area debt split over 20 spots: amount =
+        // ceil(1,500,000 / (100000 * 20)) = 1, which upstream rejects.
+        assert_eq!(grass_die(-75_000, -1_500_000, 20), None);
+        // Over 5 spots it is ceil(1,500,000 / 500,000) = 3 and dist stays 20.
+        assert_eq!(
+            grass_die(-300_000, -1_500_000, 5),
+            Some(GrassDie {
+                amount: 3,
+                dist: 20
+            })
+        );
+        // amount is capped at 300 no matter how deep the debt.
+        let huge = grass_die(-100_000_000, -99_999_000, 1).unwrap();
+        assert_eq!(huge.amount, 300);
+        assert_eq!(huge.dist, 75, "dist is capped at 75");
+    }
+
+    #[test]
+    fn grass_die_targets_start_at_the_spot_and_stay_within_dist() {
+        let params = GrassDie {
+            amount: 15,
+            dist: 20,
+        };
+        let targets = grass_die_targets([200, 200, 0], &params);
+        assert_eq!(targets.len(), 15);
+        assert_eq!(
+            targets[0],
+            [200, 200, 0],
+            "the spot itself is the first target"
+        );
+        assert!(
+            targets.iter().all(|&[x, y, z]| {
+                (x - 200).abs() <= 20 && z.abs() <= 20 && (y - 200).abs() <= 10
+            })
+        );
+        // Position-seeded, so two passes over the same spot agree.
+        assert_eq!(targets, grass_die_targets([200, 200, 0], &params));
+        assert_ne!(targets, grass_die_targets([201, 200, 0], &params));
+    }
+
+    #[test]
+    fn grass_die_turns_grass_into_coarse_dirt() {
+        assert_eq!(
+            grass_die_replacement("minecraft:grass_block"),
+            Some("minecraft:coarse_dirt")
+        );
+        // Only the grass branch is carried. The leaf -> decayed-leaves, bush ->
+        // air and nether-grass -> netherrack branches need blocks/behaviour this
+        // slice does not carry; they are recorded as gaps in notes.md.
+        assert_eq!(grass_die_replacement("minecraft:oak_leaves"), None);
+        assert_eq!(grass_die_replacement("naturesaura:aura_bloom"), None);
+        assert_eq!(grass_die_replacement("minecraft:dirt"), None);
     }
 }

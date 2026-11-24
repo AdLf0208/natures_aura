@@ -174,6 +174,152 @@ report: no.
 
 Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices
 
+## Slice 3 (2026-11-24) — the grass-death drain-spot effect (0.2.4)
+
+**Version 0.2.4** (patch of the 0.2.3 copyright fix on PR #1859). Pin unchanged:
+`0a875da91dbb0fdcb7ba8c42c11341aa229af51a` / mixins
+`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, launcher 0.2.92, for 26.3.
+
+### The gap, and the choice
+
+`FINDINGS.md` §3.1, verbatim: *"The aura drain-spot passive effects
+(`chunk/effect/*`: plant boost, grass death, ore spawn, nether decay …): they
+change the world each second at every drained spot and are a slice of their
+own."* The artefact's `de/ellpeck/naturesaura/chunk/effect/` holds 14 effect
+classes (`DrainSpotEffects` registers 14). The cheapest one expressible at this
+pin was measured, not guessed:
+
+| Effect | Needs | Verdict |
+|---|---|---|
+| **grass death** (`GrassDieEffect`) | a negative spot + a negative radius-50 area, `level_set_block` grass→coarse dirt | **chosen** — both helpers are in the pin's SDK (`Backend::level_set_block` 859, `LevelRef::set_block`) |
+| plant boost | `BonemealableBlock.performBonemeal` on an arbitrary block | not ported — the pin stamps `bonemeal`/`perform_bonemeal` hooks but exposes no "bonemeal this position" helper |
+| ore spawn | places an `naturesaura:*` ore block | not ported — no ore block is carried; a vanilla ore would change the mod's product |
+| nether decay | nether blocks → nether-rack/ash | not ported — needs a dimension-specific block set the slice does not carry |
+| grass death's other branches | `DECAYED_LEAVES`, bush→air, nether-grass→netherrack | not ported — the mod's decayed-leaves block is not carried |
+
+This is the `deep` tier's logic shape: it shapes the already-ported chunk-aura
+store (the spot amount the bloom and `/naturesaura spot` already expose) and
+writes blocks through the pin's existing `level` handle; it adds no machine,
+renderer, item or API.
+
+### Upstream behaviour (read from tag `41.10`, the commit in this file's header)
+
+Files read at
+`https://raw.githubusercontent.com/Ellpeck/NaturesAura/41.10/src/main/java/de/ellpeck/naturesaura/…`:
+`chunk/effect/DrainSpotEffects.java`, `chunk/effect/GrassDieEffect.java`,
+`chunk/effect/PlantBoostEffect.java`, `chunk/AuraChunk.java`,
+`api/aura/chunk/IAuraChunk.java`, `InternalHooks.java`. The rules:
+
+- `AuraChunk.update()` calls every effect's `update(level, chunk, …)` at each
+  drain spot; the mod ticks its active chunks once a second (20 ticks).
+- `GrassDieEffect.calcValues`: active only when `spot < 0` **and** the radius-50
+  area aura `InternalHooks.getAuraAndSpotAmountInArea` is negative. That area is
+  `1_000_000 + the spot sum`; `spotCount` is the **count** of spots
+  (`AuraChunk.getAuraAndSpotAmount` increments a counter per spot). Then
+  `amount = min(300, ceil(|aura| / 100000 / spotCount))`, requiring `amount > 1`,
+  and `dist = clamp(|aura| / 75000, 5, 75)`.
+- `update` sets a `GrassBlock` to `COARSE_DIRT` (among other block branches) at
+  `amount / 2 + random(amount / 2)` gaussian-scattered positions within `dist`.
+- `appliesHere`: only in the Overworld and the Nether.
+
+The port implements exactly the `GrassBlock → coarse_dirt` branch; the other
+branches are recorded above and in the coverage table.
+
+### Red, before the glue (verbatim)
+
+`cargo test` on the stubbed rule (`ports/_shared/evidence/naturesaura/effect-red.log`):
+
+```
+running 24 tests
+test runtime::tests::grass_die_concentrates_the_debt_over_the_spot_count ... FAILED
+test runtime::tests::grass_die_fires_only_at_a_debt_whose_area_is_negative ... FAILED
+test runtime::tests::grass_die_turns_grass_into_coarse_dirt ... FAILED
+
+---- runtime::tests::grass_die_fires_only_at_a_debt_whose_area_is_negative stdout ----
+thread 'runtime::tests::grass_die_fires_only_at_a_debt_whose_area_is_negative' (863269) panicked at src/runtime.rs:893:9:
+assertion `left == right` failed
+  left: None
+ right: Some(GrassDie { amount: 15, dist: 20 })
+
+test result: FAILED. 21 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+Green: the same three tests pass after the rule is written, then
+`grass_die_targets_start_at_the_spot_and_stay_within_dist` pins the deterministic
+target set. `cargo test` is **25 passed, 0 failed**.
+
+### Glue and deviations
+
+`src/runtime.rs` owns the rule (`grass_die`, `grass_die_replacement`,
+`grass_die_targets`), `src/lib.rs` adds one `server_tick` listener that runs the
+effect once every 20 running ticks over each overworld/nether level, and the
+per-spot pass calls `grass_die` then `level.set_block(..., NEIGHBORS | CLIENTS)`.
+
+- **Deterministic scatter.** Upstream samples `level.random` (gaussian); the port
+  uses a position-seeded LCG and makes the spot itself the first target.
+  Upstream's pure scatter can miss the very spot that drives the effect, which
+  makes it unobservable in a small game scenario; starting at the spot keeps the
+  world change identical while being reproducible. Both the generator and the
+  first-target choice are in `runtime.rs` and unit-tested.
+- **Chunk discovery.** Upstream walks `LevelData.auraChunksWithSpots`, which the
+  public SDK does not expose (`level_loaded_chunks` is a hidden backend method).
+  The port scans the 8-chunk (128-block) window around each online player via
+  the public `Host::chunk` / `Players::server_players` and reads each chunk's
+  attachment. That window is wider than the effect's 75-block scatter and
+  50-block area radius.
+- **Only the grass branch** of `GrassDieEffect.update` is carried (see the table).
+
+### In-game assertion (phase J, fail-capable)
+
+Two `minecraft:grass_block`s 100 blocks apart in the Overworld. The first gets
+`/naturesaura drain … 2500000` (spot `-2,500,000`, radius-50 area `-1,500,000`,
+count 1 → `amount 15`, `dist 20`); the second stays at spot 0. After 45 ticks the
+drained block reads `minecraft:coarse_dirt` and the control still reads
+`minecraft:grass_block`. `SELFTEST=effect` asserts the drained block is *still*
+grass and ends `EXIT:1`; the unmodded control cannot run `/naturesaura drain` at
+all. Both the spot and the area are read with `/naturesaura spot` and
+`/naturesaura aura` before and after, so the threshold crossing is in the log.
+
+### Delivery and verification (0.2.4)
+
+`naturesaura.hmod` (in the port root, never `target/`): **59,131 B**, SHA-256
+`4e70a92adf6932e72f0de90393dd9fedd2019b663fa4d0e91140090c7522b5c9`, 62
+entries, no packed `Cargo.lock`. Two `rm -f Cargo.lock && cargo horizon-mod build`
+runs were `cmp`-identical; `check` printed `naturesaura 0.2.4 … 59131 bytes`,
+`fits 0a875da` printed `made for` and `fits 0b14f8a` printed `fits`;
+`verify-sdk-package.py` was **1/1** including *"package matches the tree"*.
+
+| Check | Command | Result |
+|---|---|---|
+| Runtime tests | `cargo test` | **25 passed**, 0 failed (`evidence/naturesaura/sdk-test.log`, re-generated after the final build) |
+| Lints / format | `cargo clippy --all-targets -- -D warnings` / `cargo fmt --check` | exit 0, 0 warnings / clean |
+| Package, twice | `rm -f Cargo.lock && cargo horizon-mod build` ×2 | 59,131 B, `cmp`-identical, forwarded to `AdLf-PC` (`Compiling naturesaura v0.2.4`) |
+| Registry check | `cargo horizon-mod check naturesaura.hmod` | `naturesaura 0.2.4 …`, 59,131 B, sha `4e70a92a…b5c9`, exit 0 (`sdk-check.log`) |
+| Fits pin | `cargo horizon-mod fits … --build 0a875da` | **`0a875da  made for`** (`sdk-fits.log`) |
+| Fits other build | `cargo horizon-mod fits … --build 0b14f8a` | **`0b14f8a  fits`** (`sdk-fits-other.log`) |
+| Package gate | `verify-sdk-package.py naturesaura` | **1/1**, "package matches the tree" |
+| Game build | `launcher-game.sh build naturesaura --port ports/naturesaura` | stale 0.2.3 tag removed; `Compiling naturesaura (1 of 1)`; new tag `native-0a875da-0fb4e08164b6` (`launcher-build-0.2.4.log`) |
+| In-game default | `build-slot.sh run --step e2e -- bash tools/e2e.sh` | A–I plus J → `PASS` + **`EXIT:0`** (`e2e-launcher.log`) |
+| Control | `CONTROL=1 GAME=$CONTROL_GAME` | `Unknown or incomplete command` → `FAIL` + **`EXIT:1`** (`e2e-launcher-control.log`) |
+| Can fail | `SELFTEST=1` / `SELFTEST=effect` | conservation / inverted grass assertion → `FAIL` + **`EXIT:1`** (`e2e-selftest.log`, `e2e-selftest-effect.log`) |
+| Log gate | `check-e2e-logs.py naturesaura-e2e --strict` | logs=5, ok=5, missing-exit=0, bad-exit=0 |
+
+The exact upstream copyright line was checked first in `LICENSE`,
+`LICENSE-NOTICE.md` and both packed content copies and left byte-for-byte as the
+reviewer required. `E2E_TMP`/`SOCK` came from `launcher-game.sh env`, never
+`/tmp` for the game root. No local `Block`/`Item` type or variant was introduced,
+so `fits` was not false-failed.
+
+### Coverage added by this slice
+
+| Family | In 0.2.4 | Status | Proof |
+|---|---|---|---|
+| grass-die effect (`chunk/effect/GrassDieEffect`) | `GrassBlock → COARSE_DIRT`, `server_tick` every 20 ticks | **tested** | phase J: drained spot's grass → coarse dirt, undrained control stays grass; `SELFTEST=effect` inverts it |
+| effect threshold (`calcValues`) | negative spot + negative radius-50 area, count divisor, `amount`/`dist` clamps | **tested** | 3 unit tests (`grass_die_*`), `/naturesaura spot`/`aura` readouts in phase J |
+| grass-die leaf/bush/nether-grass branches, plant boost, ore spawn, nether decay | — | **not ported** | uncarried blocks/helpers (see the choice table) |
+
+Skills: superpowers/using-superpowers,brainstorming,writing-plans,test-driven-development,systematic-debugging,verification-before-completion; BeautifulRust/rust-best-practices,rust-port
+
 ## The slice boundary (and why)
 
 Implemented: the chunk aura drain spots (base 1,000,000 + spots), the aura bloom
@@ -579,16 +725,22 @@ Skills: superpowers/using-superpowers,writing-plans,verification-before-completi
 
 ## Next slice
 
-- **Family:** the aura drain-spot passive effects (`chunk/effect/*`: plant boost, grass death,
-  ore spawn, nether decay), from `FINDINGS.md` §3.1's exact line "The aura drain-spot passive
-  effects (`chunk/effect/*`: plant boost, grass death, ore spawn, nether decay …): they change
-  the world each second at every drained spot and are a slice of their own."
-- **Why it fits:** `deep` tier, and it shapes the already-ported chunk-aura store (the spot
-  amount the bloom and `/naturesaura spot` already expose) rather than adding a new API, machine
-  or renderer — the same logic-shape as slice 1.
-- **In-game assertion:** with `ctl setblock`/`ctl block`, create a drained spot at a known
-  negative amount under a sapling/grass patch; tick and read the block id back with `ctl block`,
-  asserting the effect's outcome (plant advances / grass becomes dirt), while a control spot at
-  ≥ 0 under the same blocks shows no change — the differential that would fail if the effect
-  fired unconditionally. Read the spot with `/naturesaura spot` before and after to prove the
-  amount crossed the effect's threshold.
+- **Family:** the leaf branch of the same `GrassDieEffect` — `LeavesBlock →
+  naturesaura:decayed_leaves` — from the gap line recorded in this slice's choice
+  table and `FINDINGS.md` §3.1's "the aura drain-spot passive effects
+  (`chunk/effect/*`: plant boost, grass death, ore spawn, nether decay …)".
+  It is the cheapest remaining family: the threshold, the once-a-second driver
+  and the target set are already in `runtime.rs`/`lib.rs`, and `decayed_leaves`
+  is a block in the kept jar that `assemble_content.py` can carry. Plant boost
+  stays blocked: the pin exposes `level_bone_meal` only on the hidden
+  `LevelsBackendMut`, with no public `ServerHost` wrapper (`world_edit.rs` has
+  none), so a mod cannot bonemeal an arbitrary position.
+- **Why it fits:** `deep` tier, no new machine/renderer/API — one more block
+  branch on the existing drained-spot effect, with its block carried in the
+  same flat `.hmod`.
+- **In-game assertion:** `ctl setblock` a `minecraft:oak_leaves` block at a
+  drained spot (`/naturesaura drain … 2500000`, radius-50 area `-1,500,000`),
+  tick 45, and `ctl block` it back as `naturesaura:decayed_leaves`; a control at
+  spot ≥ 0 under `minecraft:oak_leaves` must stay `minecraft:oak_leaves`.
+  `SELFTEST=effect-leaf` inverts the drained assertion to `EXIT:1`, and the
+  `/naturesaura spot`/`aura` readouts prove the threshold crossing.

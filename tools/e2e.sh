@@ -16,6 +16,10 @@
 #       places and reads back, and an unknown id is refused.
 #  I    every carried loot table drops its block when broken, with a vanilla
 #       block as the harness's differential.
+#  J    a drained spot (negative amount, negative radius-50 area) turns grass
+#       into coarse dirt on the next second, while an undrained spot (>= 0)
+#       under the same grass leaves it alone. SELFTEST=effect inverts the
+#       drained patch's assertion and must FAIL.
 #
 # The game is a launcher-built client that carries the flat `.hmod` (the SDK
 # format, 2026-11-18): no `--dev-mod`, because `assets/` and `data/` travel in
@@ -77,6 +81,15 @@ CZ=6
 TX=196
 TY=200
 TZ=8
+# The grass-death patch: 64 blocks from the altar, outside its 50-block area
+# radius, so this spot alone decides the effect's threshold. The control patch
+# is another 100 blocks away, outside the drained spot's 20-block scatter.
+GX=150
+GY=200
+GZ=40
+KX=250
+KY=200
+KZ=40
 # The chunk base every area read starts from, and what the bloom adds.
 DEFAULT_AURA=1000000
 BLOOM_AURA=150000
@@ -509,4 +522,31 @@ ctl command "gamemode creative @s" >/dev/null
 ctl command "clear @s" >/dev/null
 echo "  all four carried loot tables dropped their block"
 
-echo "PASS: a bloom stores exactly 150,000 aura once, an altar outside its multiblock and an altar in an area with no aura transmute nothing, the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura, both carried recipes craft their declared id and count in a real table with the grid emptied and the distinctive ingredient consumed while two wrong-ingredient controls craft nothing, the load log has no rejected ingredient, all seven carried items read back, all four carried blocks place and drop themselves with a vanilla stone as the drop differential, and unknown ids are refused"
+echo "== J: a drained spot kills grass; an undrained spot under grass does not =="
+# Two identical grass blocks 100 blocks apart, outside each other's influence.
+ctl command "execute in minecraft:overworld run setblock $GX $GY $GZ minecraft:grass_block" >/dev/null
+ctl command "execute in minecraft:overworld run setblock $KX $KY $KZ minecraft:grass_block" >/dev/null
+ctl wait 6 >/dev/null
+[ "$(block_name "$GX" "$GY" "$GZ")" = "minecraft:grass_block" ] || fail "the drained patch was not grass"
+[ "$(block_name "$KX" "$KY" "$KZ")" = "minecraft:grass_block" ] || fail "the control patch was not grass"
+spot "$GX" "$GY" "$GZ"
+expect "the drained patch's spot before draining" "$SPOT" 0
+say "naturesaura drain $GX $GY $GZ 2500000"
+ctl wait 10 >/dev/null
+spot "$GX" "$GY" "$GZ"
+expect "the drained patch's spot" "$SPOT" -2500000
+aura "$GX" "$GY" "$GZ" 50
+expect "the drained area crossed zero" "$AREA" -1500000
+# One effect second is 20 ticks; wait more than two to be independent of phase.
+ctl wait 45 >/dev/null
+spot "$GX" "$GY" "$GZ"
+expect "the drained patch's spot after the effect" "$SPOT" -2500000
+if [ "$SELFTEST" = effect ]; then
+    expect "the drained patch (selftest: must fail)" "$(block_name "$GX" "$GY" "$GZ")" "minecraft:grass_block"
+else
+    expect "the drained patch became coarse dirt" "$(block_name "$GX" "$GY" "$GZ")" "minecraft:coarse_dirt"
+fi
+expect "the undrained control patch stays grass" "$(block_name "$KX" "$KY" "$KZ")" "minecraft:grass_block"
+echo "  spot $SPOT, area $AREA: the drained patch became coarse dirt while the undrained patch stayed grass"
+
+echo "PASS: a bloom stores exactly 150,000 aura once, an altar outside its multiblock and an altar in an area with no aura transmute nothing, the complete altar turns an iron ingot into infused iron while the area and its container account for exactly the recipe's 15,040 aura, both carried recipes craft their declared id and count in a real table with the grid emptied and the distinctive ingredient consumed while two wrong-ingredient controls craft nothing, the load log has no rejected ingredient, all seven carried items read back, all four carried blocks place and drop themselves with a vanilla stone as the drop differential, unknown ids are refused, and a drained spot turns grass into coarse dirt while an undrained spot leaves it grass"
